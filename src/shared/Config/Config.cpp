@@ -23,108 +23,146 @@
  */
 
 #include "Config.h"
-#include <ace/Configuration_Import_Export.h>
+#include "Log.h"
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <cctype>
 
-#include "Policies/Singleton.h"
-
-INSTANTIATE_SINGLETON_1(Config);
-
-static bool GetValueHelper(ACE_Configuration_Heap* mConf, const char* name, ACE_TString& result)
+Config& Config::instance()
 {
-    if (!mConf)
-    {
-        return false;
-    }
-
-    ACE_TString section_name;
-    ACE_Configuration_Section_Key section_key;
-    ACE_Configuration_Section_Key root_key = mConf->root_section();
-
-    int i = 0;
-    while (mConf->enumerate_sections(root_key, i, section_name) == 0)
-    {
-        mConf->open_section(root_key, section_name.c_str(), 0, section_key);
-        if (mConf->get_string_value(section_key, name, result) == 0)
-        {
-            return true;
-        }
-        ++i;
-    }
-
-    return false;
+    static Config instance;
+    return instance;
 }
 
-Config::Config()
-    : mConf(NULL)
+bool Config::Load(const std::string& filename)
 {
-}
-
-Config::~Config()
-{
-    delete mConf;
-}
-
-bool Config::SetSource(const char* file)
-{
-    mFilename = file;
-
-    return Reload();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_configFile = filename;
+    ParseFile(filename);
+    return true;
 }
 
 bool Config::Reload()
 {
-    delete mConf;
-    mConf = new ACE_Configuration_Heap;
-
-    if (mConf->open() == 0)
-    {
-        ACE_Ini_ImpExp config_importer(*mConf);
-        if (config_importer.import_config(mFilename.c_str()) == 0)
-        {
-            return true;
-        }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_entries.clear();
+    if (!m_configFile.empty()) {
+        ParseFile(m_configFile);
+        NotifyReload();
+        return true;
     }
-
-    delete mConf;
-    mConf = NULL;
     return false;
 }
 
-std::string Config::GetStringDefault(const char* name, const char* def)
+void Config::ParseFile(const std::string& filename)
 {
-    ACE_TString val;
-    return GetValueHelper(mConf, name, val) ? val.c_str() : def;
-}
-
-bool Config::GetBoolDefault(const char* name, bool def)
-{
-    ACE_TString val;
-    if (!GetValueHelper(mConf, name, val))
-    {
-        return def;
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        sLog.outError("Config: Could not open %s", filename.c_str());
+        return;
     }
 
-    const char* str = val.c_str();
-    if (strcmp(str, "true") == 0 || strcmp(str, "TRUE") == 0 ||
-        strcmp(str, "yes") == 0 || strcmp(str, "YES") == 0 ||
-        strcmp(str, "1") == 0)
-    {
-        return true;
-    }
-    else
-    {
-        return false;
+    std::string line;
+    while (std::getline(file, line)) {
+        // Remove comments
+        size_t comment = line.find_first_of("#;");
+        if (comment != std::string::npos)
+            line = line.substr(0, comment);
+
+        // Trim whitespace
+        line.erase(line.begin(), std::find_if(line.begin(), line.end(), [](int ch) {
+            return !std::isspace(ch);
+        }));
+        line.erase(std::find_if(line.rbegin(), line.rend(), [](int ch) {
+            return !std::isspace(ch);
+        }).base(), line.end());
+
+        if (line.empty())
+            continue;
+
+        // Split key and value
+        size_t eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+
+        std::string key = line.substr(0, eq);
+        std::string value = line.substr(eq + 1);
+
+        // Trim whitespace from key and value
+        key.erase(key.begin(), std::find_if(key.begin(), key.end(), [](int ch) {
+            return !std::isspace(ch);
+        }));
+        key.erase(std::find_if(key.rbegin(), key.rend(), [](int ch) {
+            return !std::isspace(ch);
+        }).base(), key.end());
+
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](int ch) {
+            return !std::isspace(ch);
+        }));
+        value.erase(std::find_if(value.rbegin(), value.rend(), [](int ch) {
+            return !std::isspace(ch);
+        }).base(), value.end());
+
+        if (!key.empty())
+            m_entries[key] = value;
     }
 }
 
-int32 Config::GetIntDefault(const char* name, int32 def)
+std::string Config::GetStringDefault(const std::string& name, const std::string& defaultValue) const
 {
-    ACE_TString val;
-    return GetValueHelper(mConf, name, val) ? atoi(val.c_str()) : def;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_entries.find(name);
+    return it != m_entries.end() ? it->second : defaultValue;
 }
 
-float Config::GetFloatDefault(const char* name, float def)
+int Config::GetIntDefault(const std::string& name, int defaultValue) const
 {
-    ACE_TString val;
-    return GetValueHelper(mConf, name, val) ? (float)atof(val.c_str()) : def;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_entries.find(name);
+    if (it == m_entries.end())
+        return defaultValue;
+    try {
+        return std::stoi(it->second);
+    } catch (...) {
+        return defaultValue;
+    }
 }
+
+float Config::GetFloatDefault(const std::string& name, float defaultValue) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_entries.find(name);
+    if (it == m_entries.end())
+        return defaultValue;
+    try {
+        return std::stof(it->second);
+    } catch (...) {
+        return defaultValue;
+    }
+}
+
+bool Config::GetBoolDefault(const std::string& name, bool defaultValue) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_entries.find(name);
+    if (it == m_entries.end())
+        return defaultValue;
+    std::string value = it->second;
+    std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
+void Config::RegisterReloadCallback(const std::function<void()>& callback)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_reloadCallbacks.push_back(callback);
+}
+
+void Config::NotifyReload()
+{
+    for (auto& callback : m_reloadCallbacks) {
+        callback();
+    }
+}
+

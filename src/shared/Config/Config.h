@@ -21,94 +21,46 @@
  * World of Warcraft, and all World of Warcraft or Warcraft art, images,
  * and lore are copyrighted by Blizzard Entertainment, Inc.
  */
+ 
+#pragma once
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <mutex>
+#include <functional>
 
-#ifndef CONFIG_H
-#define CONFIG_H
-
-#include "Common/Common.h"
-#include <Policies/Singleton.h>
-#include "Platform/Define.h"
-
-class ACE_Configuration_Heap;
-
-/**
- * @brief
- *
- */
 class Config
 {
-    public:
-        /**
-         * @brief
-         *
-         */
-        Config();
-        /**
-         * @brief
-         *
-         */
-        ~Config();
+public:
+    static Config& instance();
 
-        /**
-         * @brief
-         *
-         * @param file
-         * @return bool
-         */
-        bool SetSource(const char* file);
-        /**
-         * @brief
-         *
-         * @return bool
-         */
-        bool Reload();
+    // Loads the configuration file (INI-like format)
+    bool Load(const std::string& filename);
 
-        /**
-         * @brief
-         *
-         * @param name
-         * @param def
-         * @return std::string
-         */
-        std::string GetStringDefault(const char* name, const char* def);
-        /**
-         * @brief
-         *
-         * @param name
-         * @param def
-         * @return bool
-         */
-        bool GetBoolDefault(const char* name, const bool def = false);
-        /**
-         * @brief
-         *
-         * @param name
-         * @param def
-         * @return int32
-         */
-        int32 GetIntDefault(const char* name, const int32 def);
-        /**
-         * @brief
-         *
-         * @param name
-         * @param def
-         * @return float
-         */
-        float GetFloatDefault(const char* name, const float def);
+    // Reloads the last loaded file and notifies callbacks
+    bool Reload();
 
-        /**
-         * @brief
-         *
-         * @return std::string
-         */
-        std::string GetFilename() const { return mFilename; }
+    // Value retrieval with defaults
+    std::string GetStringDefault(const std::string& name, const std::string& defaultValue) const;
+    int GetIntDefault(const std::string& name, int defaultValue) const;
+    float GetFloatDefault(const std::string& name, float defaultValue) const;
+    bool GetBoolDefault(const std::string& name, bool defaultValue) const;
 
-    private:
+    // Hot-reload support
+    void RegisterReloadCallback(const std::function<void()>& callback);
 
-        std::string mFilename; /**< TODO */
-        ACE_Configuration_Heap* mConf; /**< TODO */
+private:
+    Config() = default;
+    Config(const Config&) = delete;
+    Config& operator=(const Config&) = delete;
+
+    void ParseFile(const std::string& filename);
+    void NotifyReload();
+
+    std::unordered_map<std::string, std::string> m_entries;
+    std::vector<std::function<void()>> m_reloadCallbacks;
+    mutable std::mutex m_mutex;
+    std::string m_configFile;
 };
 
-#define sConfig MaNGOS::Singleton<Config>::Instance()
-
-#endif
+#define sConfig (Config::instance())
