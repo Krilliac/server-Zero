@@ -22,346 +22,310 @@
  * and lore are copyrighted by Blizzard Entertainment, Inc.
  */
 
-#include "MoveSpline.h"
-#include <sstream>
+#include "MovementChecks.h"
+#include "Player.h"
+#include "World.h"
+#include "AnticheatMgr.h"
+#include "Map.h"
+#include "TerrainMgr.h"
+#include "MovementGenerator.h"
+#include "ObjectAccessor.h"
+#include "SpellAuras.h"
 #include "Log.h"
-#include "Unit.h"
 
-namespace Movement
+void MovementChecks::FullMovementCheck(Player* player, const MovementInfo& moveInfo)
 {
-    extern float computeFallTime(float path_length, bool isSafeFall);
-    extern float computeFallElevation(float time_passed, bool isSafeFall, float start_velocy);
-    extern float computeFallElevation(float time_passed);
+    // Skip checks for GMs and during teleportation
+    if (player->IsGameMaster() || player->IsBeingTeleported())
+        return;
+    
+    // 1. Physics-based checks
+    ValidatePhysics(player, moveInfo);
+    
+    // 2. State-specific checks
+    ValidateStateTransitions(player, moveInfo);
+    
+    // 3. Advanced teleport detection
+    CheckTeleport(player, moveInfo);
+    
+    // 4. Precision speed validation
+    CheckSpeed(player, moveInfo);
+    
+    // 5. Environmental validation
+    ValidateEnvironment(player, moveInfo.GetPos());
+    
+    // 6. Spline movement validation
+    ValidateSplineMovement(player, moveInfo);
+    
+    // 7. Time synchronization
+    ValidateTimestamps(player, moveInfo);
+}
 
-    /**
-     * @brief Computes the current position on the spline.
-     * @return The computed location.
-     */
-    Location MoveSpline::ComputePosition() const
+void MovementChecks::ValidatePhysics(Player* player, const MovementInfo& moveInfo)
+{
+    const Position& newPos = moveInfo.GetPos();
+    const Position& prevPos = player->GetPosition();
+    
+    // 1. Fall time validation
+    if (moveInfo.HasMovementFlag(MOVEFLAG_FALLING))
     {
-        MANGOS_ASSERT(Initialized());
+        ValidateFallPhysics(player, moveInfo);
+    }
+    
+    // 2. Z-axis validation
+    ValidateVerticalMovement(player, newPos);
+    
+    // 3. Collision detection
+    ValidateCollision(player, prevPos, newPos);
+}
 
-        float u = 1.f;
-        int32 seg_time = spline.length(point_Idx, point_Idx + 1);
-        if (seg_time > 0)
-        {
-            u = (time_passed - spline.length(point_Idx)) / (float)seg_time;
-        }
-        Location c;
-        spline.evaluate_percent(point_Idx, u, c);
+void MovementChecks::ValidateFallPhysics(Player* player, const MovementInfo& moveInfo)
+{
+    uint32 fallTime = moveInfo.GetFallTime();
+    float fallDistance = moveInfo.GetFallStart() - moveInfo.GetPos().z;
+    
+    // Calculate expected fall time using physics: t = √(2h/g)
+    float expectedTime = sqrtf(2 * fallDistance / GRAVITY) * 1000;
+    
+    // Allow tolerance for network variations
+    if (abs(static_cast<int32>(fallTime - expectedTime)) > FALL_TIME_TOLERANCE)
+    {
+        sAnticheatMgr->RecordViolation(player, CHEAT_TIME_DESYNC, 
+            fmt::format("Fall time: {} vs expected {:.1f}", fallTime, expectedTime));
+    }
+}
 
-        if (splineflags.falling)
+void MovementChecks::ValidateVerticalMovement(Player* player, const Position& newPos)
+{
+    float terrainHeight = player->GetMap()->GetHeight(newPos.x, newPos.y, MAX_HEIGHT);
+    float liquidLevel = player->GetMap()->GetWaterLevel(newPos.x, newPos.y);
+    float zDelta = newPos.z - terrainHeight;
+    
+    // 1. Fly hack detection
+    if (zDelta > MAX_Z_DELTA && !player->IsFlying() && !player->IsFalling())
+    {
+        sAnticheatMgr->RecordViolation(player, CHEAT_FLY_HACK,
+            fmt::format("Z-delta: {:.2f}", zDelta));
+    }
+    
+    // 2. Liquid state validation
+    if (player->IsInWater() && newPos.z > liquidLevel + WATER_WALK_HEIGHT)
+    {
+        if (!player->HasAuraType(SPELL_AURA_WATER_WALK))
         {
-            computeFallElevation(c.z);
+            sAnticheatMgr->RecordViolation(player, CHEAT_WATER_WALK,
+                fmt::format("Water level: {:.2f} Position: {:.2f}", liquidLevel, newPos.z));
         }
+    }
+}
 
-        if (splineflags.done && splineflags.isFacing())
+void MovementChecks::ValidateCollision(Player* player, const Position& from, const Position& to)
+{
+    // Skip collision checks in instances
+    if (player->GetMap()->Instanceable())
+        return;
+        
+    Vector3 start(from.x, from.y, from.z);
+    Vector3 end(to.x, to.y, to.z);
+    Vector3 hitPos;
+    float hitDist;
+    
+    // Check collision using G3D raycast
+    if (player->GetMap()->GetHitPosition(start, end, hitPos, hitDist, COLLISION_TOLERANCE))
+    {
+        float bypassDistance = start.distance(end);
+        float actualDistance = start.distance(hitPos);
+        
+        // Allow small tolerance for uneven terrain
+        if (bypassDistance - actualDistance > COLLISION_TOLERANCE * 2)
         {
-            if (splineflags.final_angle)
-            {
-                c.orientation = facing.angle;
-            }
-            else if (splineflags.final_point)
-            {
-                c.orientation = atan2(facing.f.y - c.y, facing.f.x - c.x);
-            }
-            // nothing to do for MoveSplineFlag::Final_Target flag
+            sAnticheatMgr->RecordViolation(player, CHEAT_WALL_CLIMB,
+                fmt::format("Bypassed {:.2f} units of collision", bypassDistance - actualDistance));
         }
-        else
+    }
+}
+
+void MovementChecks::ValidateStateTransitions(Player* player, const MovementInfo& moveInfo)
+{
+    const Position& newPos = moveInfo.GetPos();
+    const Position& prevPos = player->GetPosition();
+    float distance = prevPos.GetExactDist(newPos);
+    
+    // 1. Swimming state validation
+    bool wasSwimming = player->IsInWater();
+    bool isSwimming = player->GetMap()->IsInWater(newPos.x, newPos.y, newPos.z);
+    
+    if (isSwimming != wasSwimming && distance > 5.0f)
+    {
+        if (!wasSwimming && !player->CanSwim())
         {
-            Vector3 hermite;
-            spline.evaluate_derivative(point_Idx, u, hermite);
-            c.orientation = atan2(hermite.y, hermite.x);
+            sAnticheatMgr->RecordViolation(player, CHEAT_WATER_WALK,
+                "Entered water without swimming ability");
         }
-        c.orientation = G3D::wrap(c.orientation, 0.f, (float)G3D::twoPi());
-        return c;
+    }
+    
+    // 2. Flying state validation
+    if (moveInfo.HasMovementFlag(MOVEFLAG_FLYING) && !player->CanFly())
+    {
+        sAnticheatMgr->RecordViolation(player, CHEAT_FLY_HACK,
+            "Flying without ability");
+    }
+}
+
+void MovementChecks::CheckTeleport(Player* player, const MovementInfo& moveInfo)
+{
+    const Position& prevPos = player->GetPosition();
+    const Position& newPos = moveInfo.GetPos();
+    float distance = prevPos.GetExactDist(newPos);
+    
+    // Calculate maximum possible distance
+    uint32 timeDiff = moveInfo.GetTime() - player->GetLastMoveTime();
+    float maxPossible = player->GetSpeed(MOVE_RUN) * (timeDiff / 1000.0f) * TELEPORT_MULTIPLIER;
+    
+    // Account for teleport spells and special abilities
+    bool isTeleporting = player->IsTeleporting() || 
+                         player->GetMotionMaster()->GetCurrentMovementGeneratorType() == TELEPORT_MOTION_TYPE;
+    
+    if (distance > maxPossible && !isTeleporting)
+    {
+        sAnticheatMgr->RecordViolation(player, CHEAT_TELEPORT, 
+            fmt::format("Distance: {:.2f} > Max: {:.2f} in {}ms", distance, maxPossible, timeDiff));
+    }
+}
+
+void MovementChecks::CheckSpeed(Player* player, const MovementInfo& moveInfo)
+{
+    const Position& prevPos = player->GetPosition();
+    const Position& newPos = moveInfo.GetPos();
+    float distance = prevPos.GetExactDist(newPos);
+    uint32 timeDiff = moveInfo.GetTime() - player->GetLastMoveTime();
+    
+    if (timeDiff == 0) return; // Prevent division by zero
+    
+    // Calculate actual speed
+    float actualSpeed = distance / (timeDiff / 1000.0f);
+    
+    // Get expected speed based on movement mode
+    float expectedSpeed = player->GetSpeed(SelectSpeedType(moveInfo));
+    
+    // Apply tolerance based on movement conditions
+    float tolerance = GetSpeedTolerance(player, moveInfo);
+    
+    if (actualSpeed > expectedSpeed * tolerance)
+    {
+        sAnticheatMgr->RecordViolation(player, CHEAT_SPEED_HACK, 
+            fmt::format("Speed: {:.1f} > {:.1f} (Tolerance: {:.2f})", 
+            actualSpeed, expectedSpeed, tolerance));
+    }
+}
+
+float MovementChecks::GetSpeedTolerance(Player* player, const MovementInfo& moveInfo)
+{
+    float tolerance = SPEED_TOLERANCE;
+    
+    // Increase tolerance in complex environments
+    if (player->IsInWater()) tolerance *= 1.3f;
+    if (player->IsFlying()) tolerance *= 1.5f;
+    if (player->IsMounted()) tolerance *= 1.4f;
+    
+    // Reduce tolerance on roads and paths
+    if (player->GetMap()->IsOnRoad(player->GetPositionX(), player->GetPositionY()))
+        tolerance *= 0.9f;
+        
+    return tolerance;
+}
+
+UnitMoveType MovementChecks::SelectSpeedType(const MovementInfo& moveInfo)
+{
+    if (moveInfo.HasMovementFlag(MOVEFLAG_SWIMMING))
+        return MOVE_SWIM;
+    if (moveInfo.HasMovementFlag(MOVEFLAG_FLYING))
+        return MOVE_FLIGHT;
+    if (moveInfo.HasMovementFlag(MOVEFLAG_WALK_MODE))
+        return MOVE_WALK;
+        
+    return MOVE_RUN;
+}
+
+void MovementChecks::ValidateEnvironment(Player* player, const Position& newPos)
+{
+    // 1. Water walking validation
+    if (player->m_movementInfo.HasMovementFlag(MOVEFLAG_WATERWALKING) && 
+        !player->CanWaterWalk() && 
+        !player->HasAuraType(SPELL_AURA_WATER_WALK))
+    {
+        sAnticheatMgr->RecordViolation(player, CHEAT_WATER_WALK, "Invalid water walking");
     }
 
-    /**
-     * @brief Computes the elevation during a fall.
-     * @param el The elevation to be computed.
-     */
-    void MoveSpline::computeFallElevation(float& el) const
+    // 2. Hover validation
+    if (player->m_movementInfo.HasMovementFlag(MOVEFLAG_HOVER) && 
+        !player->CanHover() && 
+        !player->HasAuraType(SPELL_AURA_HOVER))
     {
-        float z_now = spline.getPoint(spline.first()).z - Movement::computeFallElevation(MSToSec(time_passed));
-        float final_z = FinalDestination().z;
-        if (z_now < final_z)
+        sAnticheatMgr->RecordViolation(player, CHEAT_HOVER, "Invalid hover");
+    }
+    
+    // 3. Ground validation
+    if (player->m_movementInfo.HasMovementFlag(MOVEFLAG_ONTRANSPORT) && !player->GetTransport())
+    {
+        sAnticheatMgr->RecordViolation(player, CHEAT_TRANSPORT, "Invalid transport flag");
+    }
+}
+
+void MovementChecks::ValidateSplineMovement(Player* player, const MovementInfo& moveInfo)
+{
+    if (!player->m_movementInfo.HasMovementFlag(MOVEFLAG_SPLINE_ENABLED))
+        return;
+        
+    float splineHeight = player->m_movementInfo.GetSplineElevation();
+    float actualHeight = moveInfo.GetPos().z - player->GetPosition().z;
+    float heightDiff = fabs(splineHeight - actualHeight);
+    
+    if (heightDiff > 0.5f)
+    {
+        sAnticheatMgr->RecordViolation(player, CHEAT_SPLINE_HEIGHT, 
+            fmt::format("Spline height: {:.2f} vs actual {:.2f}", splineHeight, actualHeight));
+    }
+    
+    // Validate spline movement speed
+    if (player->m_movementInfo.HasMovementFlag(MOVEFLAG_SPLINE_ENABLED))
+    {
+        float splineSpeed = player->m_movementInfo.GetSplineSpeed();
+        float allowedSpeed = player->GetSpeed(MOVE_RUN) * 1.8f;
+        
+        if (splineSpeed > allowedSpeed)
         {
-            el = final_z;
-        }
-        else
-        {
-            el = z_now;
+            sAnticheatMgr->RecordViolation(player, CHEAT_SPLINE_SPEED, 
+                fmt::format("Spline speed: {:.1f} > max {:.1f}", splineSpeed, allowedSpeed));
         }
     }
+}
 
-    /**
-     * @brief Computes the duration of the movement.
-     * @param length The length of the path.
-     * @param velocity The velocity of the movement.
-     * @return The computed duration in milliseconds.
-     */
-    inline uint32 computeDuration(float length, float velocity)
+void MovementChecks::ValidateTimestamps(Player* player, const MovementInfo& moveInfo)
+{
+    uint32 serverTime = WorldTimer::getMSTime();
+    uint32 packetTime = moveInfo.GetTime();
+    uint32 latency = player->GetSession()->GetLatency();
+    
+    // Calculate expected time window
+    int32 timeDifference = static_cast<int32>(packetTime - serverTime);
+    int32 allowedDifference = static_cast<int32>(latency) + FALL_TIME_TOLERANCE;
+    
+    if (abs(timeDifference) > allowedDifference)
     {
-        return SecToMS(length / velocity);
+        sAnticheatMgr->RecordViolation(player, CHEAT_TIME_DESYNC, 
+            fmt::format("Time diff: {}ms > allowed {}ms (Latency: {}ms)", 
+            timeDifference, allowedDifference, latency));
     }
-
-    /**
-     * @brief Struct for initializing fall parameters.
-     */
-    struct FallInitializer
+    
+    // Validate fall start time consistency
+    if (moveInfo.HasMovementFlag(MOVEFLAG_FALLING))
     {
-        FallInitializer(float _start_elevation) : start_elevation(_start_elevation) {}
-        float start_elevation;
-        inline int32 operator()(Spline<int32>& s, int32 i)
+        uint32 fallStartDiff = moveInfo.GetFallTime() - moveInfo.GetFallStartTime();
+        if (fallStartDiff > 10000) // 10 seconds max fall
         {
-            return Movement::computeFallTime(start_elevation - s.getPoint(i + 1).z, false) * 1000.f;
+            sAnticheatMgr->RecordViolation(player, CHEAT_TIME_DESYNC,
+                fmt::format("Fall duration too long: {}ms", fallStartDiff));
         }
-    };
-
-    enum
-    {
-        minimal_duration = 1,
-    };
-
-    /**
-     * @brief Struct for initializing common parameters.
-     */
-    struct CommonInitializer
-    {
-        CommonInitializer(float _velocity) : velocityInv(1000.f / _velocity), time(minimal_duration) {}
-        float velocityInv;
-        int32 time;
-        inline int32 operator()(Spline<int32>& s, int32 i)
-        {
-            time += (s.SegLength(i) * velocityInv);
-            return time;
-        }
-    };
-
-    /**
-     * @brief Initializes the spline with the given arguments.
-     * @param args The initialization arguments.
-     */
-    void MoveSpline::init_spline(const MoveSplineInitArgs& args)
-    {
-        const SplineBase::EvaluationMode modes[2] = {SplineBase::ModeLinear, SplineBase::ModeCatmullrom};
-        if (args.flags.cyclic)
-        {
-            uint32 cyclic_point = 0;
-            // MoveSplineFlag::Enter_Cycle support dropped
-            // if (splineflags & SPLINEFLAG_ENTER_CYCLE)
-            // cyclic_point = 1;   // shouldn't be modified, came from client
-            spline.init_cyclic_spline(&args.path[0], args.path.size(), modes[args.flags.isSmooth()], cyclic_point);
-        }
-        else
-        {
-            spline.init_spline(&args.path[0], args.path.size(), modes[args.flags.isSmooth()]);
-        }
-
-        // init spline timestamps
-        if (splineflags.falling)
-        {
-            FallInitializer init(spline.getPoint(spline.first()).z);
-            spline.initLengths(init);
-        }
-        else
-        {
-            CommonInitializer init(args.velocity);
-            spline.initLengths(init);
-        }
-
-        // TODO: what to do in such cases? problem is in input data (all points are at same coords)
-        if (spline.length() < minimal_duration)
-        {
-            sLog.outError("MoveSpline::init_spline: zero length spline, wrong input data?");
-            spline.set_length(spline.last(), spline.isCyclic() ? 1000 : 1);
-        }
-        point_Idx = spline.first();
-    }
-
-    /**
-     * @brief Initializes the MoveSpline with the given arguments.
-     * @param args The initialization arguments.
-     */
-    void MoveSpline::Initialize(const MoveSplineInitArgs& args)
-    {
-        splineflags = args.flags;
-        facing = args.facing;
-        m_Id = args.splineId;
-        point_Idx_offset = args.path_Idx_offset;
-        time_passed = 0;
-
-        // detect Stop command
-        if (splineflags.done)
-        {
-            spline.clear();
-            return;
-        }
-
-        init_spline(args);
-    }
-
-    /**
-     * @brief Default constructor for MoveSpline.
-     */
-    MoveSpline::MoveSpline() : m_Id(0), time_passed(0), point_Idx(0), point_Idx_offset(0)
-    {
-        splineflags.done = true;
-    }
-
-/// ============================================================================================
-
-    /**
-     * @brief Validates the MoveSpline initialization arguments.
-     * @param unit The unit to validate against.
-     * @return True if the arguments are valid, false otherwise.
-     */
-    bool MoveSplineInitArgs::Validate(Unit* unit) const
-    {
-#define CHECK(exp) \
-    if (!(exp))\
-    {\
-        sLog.outError("MoveSplineInitArgs::Validate: expression '%s' failed for %s", #exp, unit->GetGuidStr().c_str());\
-        return false;\
-    }
-        CHECK(path.size() > 1);
-        CHECK(velocity > 0.f);
-        // CHECK(_checkPathBounds());
-        return true;
-#undef CHECK
-    }
-
-// MONSTER_MOVE packet format limitation for not CatmullRom movement:
-// each vertex offset packed into 11 bytes
-    /**
-     * @brief Checks the bounds of the path for non-CatmullRom movement.
-     * @return True if the path bounds are valid, false otherwise.
-     */
-    bool MoveSplineInitArgs::_checkPathBounds() const
-    {
-        if (!(flags & MoveSplineFlag::Mask_CatmullRom) && path.size() > 2)
-        {
-            enum
-            {
-                MAX_OFFSET = (1 << 11) / 2,
-            };
-            Vector3 middle = (path.front() + path.back()) / 2;
-            Vector3 offset;
-            for (uint32 i = 1; i < path.size() - 1; ++i)
-            {
-                offset = path[i] - middle;
-                if (fabs(offset.x) >= MAX_OFFSET || fabs(offset.y) >= MAX_OFFSET || fabs(offset.z) >= MAX_OFFSET)
-                {
-                    sLog.outError("MoveSplineInitArgs::_checkPathBounds check failed");
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-
-/// ============================================================================================
-
-    /**
-     * @brief Updates the state of the MoveSpline.
-     * @param ms_time_diff The time difference in milliseconds.
-     * @return The result of the update.
-     */
-    MoveSpline::UpdateResult MoveSpline::_updateState(int32& ms_time_diff)
-    {
-        if (Finalized())
-        {
-            ms_time_diff = 0;
-            return Result_Arrived;
-        }
-
-        UpdateResult result = Result_None;
-
-        int32 minimal_diff = std::min(ms_time_diff, segment_time_elapsed());
-        MANGOS_ASSERT(minimal_diff >= 0);
-        time_passed += minimal_diff;
-        ms_time_diff -= minimal_diff;
-
-        if (time_passed >= next_timestamp())
-        {
-            ++point_Idx;
-            if (point_Idx < spline.last())
-            {
-                result = Result_NextSegment;
-            }
-            else
-            {
-                if (spline.isCyclic())
-                {
-                    point_Idx = spline.first();
-                    time_passed = time_passed % Duration();
-                    result = Result_NextSegment;
-                }
-                else
-                {
-                    _Finalize();
-                    ms_time_diff = 0;
-                    result = Result_Arrived;
-                }
-            }
-        }
-
-        return result;
-    }
-
-    /**
-     * @brief Converts the MoveSpline to a string representation.
-     * @return The string representation of the MoveSpline.
-     */
-    std::string MoveSpline::ToString() const
-    {
-        std::stringstream str;
-        str << "MoveSpline" << std::endl;
-        str << "spline Id: " << GetId() << std::endl;
-        str << "flags: " << splineflags.ToString() << std::endl;
-        if (splineflags.final_angle)
-        {
-            str << "facing  angle: " << facing.angle;
-        }
-        else if (splineflags.final_target)
-        {
-            str << "facing target: " << facing.target;
-        }
-        else if (splineflags.final_point)
-        {
-            str << "facing  point: " << facing.f.x << " " << facing.f.y << " " << facing.f.z;
-        }
-        str << std::endl;
-        str << "time passed: " << time_passed << std::endl;
-        str << "total  time: " << Duration() << std::endl;
-        str << "spline point Id: " << point_Idx << std::endl;
-        str << "path  point  Id: " << currentPathIdx() << std::endl;
-        str << spline.ToString();
-        return str.str();
-    }
-
-    /**
-     * @brief Finalizes the MoveSpline.
-     */
-    void MoveSpline::_Finalize()
-    {
-        splineflags.done = true;
-        point_Idx = spline.last() - 1;
-        time_passed = Duration();
-    }
-
-    /**
-     * @brief Gets the current path index.
-     * @return The current path index.
-     */
-    int32 MoveSpline::currentPathIdx() const
-    {
-        int32 point = point_Idx_offset + point_Idx - spline.first() + (int)Finalized();
-        if (isCyclic())
-        {
-            point = point % (spline.last() - spline.first());
-        }
-        return point;
     }
 }
