@@ -39,6 +39,9 @@
 #include "Util.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "TimeSyncMgr.h"
+#include "AntiCheatMgr.h"
+#include "MovementChecks.h"
 #include "SharedDefines.h"
 #include "ByteBuffer.h"
 #include "AddonHandler.h"
@@ -506,6 +509,129 @@ int WorldSocket::handle_input_missing_data(void)
     return size_t(n) == recv_size ? 1 : 2;
 }
 
+void WorldSocket::HandleMovementOpcodes(WorldPacket& recvPacket)
+{
+    OpcodeHandler const& opHandle = opcodeTable[recvPacket.GetOpcode()];
+    MovementInfo movementInfo;
+    
+    // Extract movement info for thread-unsafe processing
+    if (opHandle.packetProcessing == PROCESS_THREADUNSAFE)
+        recvPacket >> movementInfo;
+
+    Player* player = m_Session->GetPlayer();
+    
+    // Skip processing for dead players or during teleport
+    if (!player || !player->IsAlive() || player->IsBeingTeleported()) 
+        return;
+
+    // ============= TIME SYNCHRONIZATION VALIDATION ============= //
+    if (!sTimeSyncMgr->ValidateMovementTime(player, movementInfo.GetTime()))
+    {
+        int32 drift = sTimeSyncMgr->GetTimeOffset(player->GetGUID());
+        sAnticheatMgr->RecordViolation(player, CHEAT_TIME_DESYNC,
+            fmt::format("Time desync: Drift={}ms | PacketTime={} | ServerTime={}",
+                drift,
+                movementInfo.GetTime(),
+                WorldTimer::getMSTime()));
+        
+        // Apply corrective action
+        switch (sConfig.GetIntDefault("TimeSync.CorrectiveAction", 1)) {
+            case 1: // Position correction
+                player->TeleportTo(player->GetPositionX(), 
+                                  player->GetPositionY(),
+                                  player->GetPositionZ(),
+                                  player->GetOrientation());
+                break;
+            case 2: // Kick player
+                KickPlayer("Time desync violation");
+                break;
+        }
+        return;
+    }
+
+    // ================= COMPREHENSIVE MOVEMENT VALIDATION ================= //
+    MovementChecks::FullMovementCheck(player, movementInfo);
+
+    // ================= OPCODE-SPECIFIC HANDLING ================= //
+    switch (recvPacket.GetOpcode())
+    {
+        case MSG_MOVE_HEARTBEAT:
+            player->HandleMoveHeartbeat(movementInfo);
+            break;
+        case MSG_MOVE_JUMP:
+            player->HandleMoveJump(movementInfo);
+            break;
+        case MSG_MOVE_START_FORWARD:
+            player->HandleMoveStartForward(movementInfo);
+            break;
+        case MSG_MOVE_START_BACKWARD:
+            player->HandleMoveStartBackward(movementInfo);
+            break;
+        case MSG_MOVE_STOP:
+            player->HandleMoveStop(movementInfo);
+            break;
+        case MSG_MOVE_START_STRAFE_LEFT:
+            player->HandleMoveStartStrafeLeft(movementInfo);
+            break;
+        case MSG_MOVE_START_STRAFE_RIGHT:
+            player->HandleMoveStartStrafeRight(movementInfo);
+            break;
+        case MSG_MOVE_STOP_STRAFE:
+            player->HandleMoveStopStrafe(movementInfo);
+            break;
+        case MSG_MOVE_START_TURN_LEFT:
+            player->HandleMoveStartTurnLeft(movementInfo);
+            break;
+        case MSG_MOVE_START_TURN_RIGHT:
+            player->HandleMoveStartTurnRight(movementInfo);
+            break;
+        case MSG_MOVE_STOP_TURN:
+            player->HandleMoveStopTurn(movementInfo);
+            break;
+        case MSG_MOVE_START_PITCH_UP:
+            player->HandleMoveStartPitchUp(movementInfo);
+            break;
+        case MSG_MOVE_START_PITCH_DOWN:
+            player->HandleMoveStartPitchDown(movementInfo);
+            break;
+        case MSG_MOVE_STOP_PITCH:
+            player->HandleMoveStopPitch(movementInfo);
+            break;
+        case MSG_MOVE_SET_RUN_MODE:
+            player->HandleMoveSetRunMode(movementInfo);
+            break;
+        case MSG_MOVE_SET_WALK_MODE:
+            player->HandleMoveSetWalkMode(movementInfo);
+            break;
+        case MSG_MOVE_FALL_LAND:
+            player->HandleMoveFallLand(movementInfo);
+            break;
+        case MSG_MOVE_START_SWIM:
+            player->HandleMoveStartSwim(movementInfo);
+            break;
+        case MSG_MOVE_STOP_SWIM:
+            player->HandleMoveStopSwim(movementInfo);
+            break;
+        case MSG_MOVE_SET_FACING:
+            player->HandleMoveSetFacing(movementInfo);
+            break;
+        default:
+            sLog.outError("Unhandled movement opcode: %u", recvPacket.GetOpcode());
+            break;
+    }
+
+    // Update player state
+    player->m_movementInfo = movementInfo;
+    player->SetPosition(movementInfo.GetPos());
+    
+    // Broadcast movement to other players
+    WorldPacket data(recvPacket.GetOpcode(), recvPacket.size());
+    data << player->GetPackGUID();
+    movementInfo.Write(data);
+    player->SendMessageToSetExcept(data, player);
+}
+
+// ====================== PACKET ROUTING ====================== //
 int WorldSocket::ProcessIncoming(WorldPacket* new_pct)
 {
     MANGOS_ASSERT(new_pct);
@@ -562,6 +688,41 @@ int WorldSocket::ProcessIncoming(WorldPacket* new_pct)
                 }
 #endif /* ENABLE_ELUNA */
                 return 0;
+            
+            // ================= MOVEMENT OPCODES ================= //
+            case MSG_MOVE_HEARTBEAT:
+            case MSG_MOVE_JUMP:
+            case MSG_MOVE_START_FORWARD:
+            case MSG_MOVE_START_BACKWARD:
+            case MSG_MOVE_STOP:
+            case MSG_MOVE_START_STRAFE_LEFT:
+            case MSG_MOVE_START_STRAFE_RIGHT:
+            case MSG_MOVE_STOP_STRAFE:
+            case MSG_MOVE_START_TURN_LEFT:
+            case MSG_MOVE_START_TURN_RIGHT:
+            case MSG_MOVE_STOP_TURN:
+            case MSG_MOVE_START_PITCH_UP:
+            case MSG_MOVE_START_PITCH_DOWN:
+            case MSG_MOVE_STOP_PITCH:
+            case MSG_MOVE_SET_RUN_MODE:
+            case MSG_MOVE_SET_WALK_MODE:
+            case MSG_MOVE_FALL_LAND:
+            case MSG_MOVE_START_SWIM:
+            case MSG_MOVE_STOP_SWIM:
+            case MSG_MOVE_SET_FACING:
+            {
+                if (m_Session != NULL)
+                {
+                    // Intercept movement packets for direct processing
+                    HandleMovementOpcodes(*new_pct);
+                    return 0; // Handled, don't forward to session
+                }
+                else
+                {
+                    sLog.outError("WorldSocket::ProcessIncoming: Client not authed opcode = %u", uint32(opcode));
+                    return -1;
+                }
+            }
             default:
             {
                 if (m_Session != NULL)

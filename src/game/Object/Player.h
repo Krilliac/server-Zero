@@ -3919,18 +3919,39 @@ private:
         Position pos;
         uint32 timestamp;
     };
-    std::deque<MovementRecord> m_movementHistory;
-    bool m_shouldCorrectPosition = false;
-    Position m_correctedPosition;
-    uint32 m_botViolations = 0;
-    uint32 m_lastMovementViolation = 0;
     
-public:
     // Movement history management
     void AddMovementRecord(const Position& pos);
     const std::deque<MovementRecord>& GetMovementHistory() const;
+    void ClearMovementHistory() { m_movementHistory.clear(); }
+
+    // Bot detection interface
+    bool IsSuspectedBot() const { return m_botViolations > 0; }
     void RecordBotViolation();
-    bool IsSuspectedBot() const;
+
+    // Time synchronization helper
+    uint32 GetAdjustedTime(uint32 clientTime) const;
+
+    // Position override with physics validation
+    virtual void SetPosition(const Position& pos) override;
+    
+    // Movement info setter with anti-cheat hook
+    void SetMovement(const MovementInfo& moveInfo);
+    
+    // Enhanced teleport handling
+    virtual void TeleportTo(uint32 mapid, float x, float y, float z, float orientation, uint32 options = 0) override;
+    
+public:
+    // Movement history storage
+    std::deque<MovementRecord> m_movementHistory;
+    
+    // Bot detection metrics
+    uint32 m_botViolations = 0;
+    uint32 m_lastMovementViolation = 0;
+    
+    // Position correction system
+    bool m_shouldCorrectPosition = false;
+    Position m_correctedPosition;
 };
 
 void AddItemsSetItem(Player* player, Item* item);

@@ -156,6 +156,7 @@ class WorldSocket : protected WorldHandler
         /// process one incoming packet.
         /// @param new_pct received packet ,note that you need to delete it.
         int ProcessIncoming(WorldPacket* new_pct);
+		void HandleMovementOpcodes(WorldPacket& recvPacket);
 
         /// Called by ProcessIncoming() on CMSG_AUTH_SESSION.
         int HandleAuthSession(WorldPacket& recvPacket);

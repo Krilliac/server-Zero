@@ -138,6 +138,9 @@ enum CharacterFlags
 
 static const uint32 corpseReclaimDelay[MAX_DEATH_COUNT] = {30, 60, 120};
 
+constexpr uint32 MAX_MOVEMENT_HISTORY = 50;
+constexpr uint32 BOT_VIOLATION_THRESHOLD = 3;
+
 //== PlayerTaxi ================================================
 
 PlayerTaxi::PlayerTaxi()
@@ -1642,7 +1645,11 @@ void Player::Update(uint32 update_diff, uint32 p_time)
     // (If correction was applied during movement checks)
     if (m_shouldCorrectPosition) 
 	{
-        TeleportTo(m_correctedPosition);
+        Unit::TeleportTo(GetMapId(), 
+                         m_correctedPosition.x, 
+                         m_correctedPosition.y, 
+                         m_correctedPosition.z, 
+                         m_correctedPosition.o);
         m_shouldCorrectPosition = false;
     }
 
@@ -1713,6 +1720,12 @@ void Player::RecordBotViolation()
     if (m_botViolations > 2) {
         GetSession()->KickPlayer("Suspected bot behavior");
     }
+}
+
+// Time Synchronization Helper
+uint32 Player::GetAdjustedTime(uint32 clientTime) const
+{
+    return sTimeSyncMgr->GetAdjustedTime(GetGUID(), clientTime);
 }
 
 void Player::HandleTeleport(uint32 mapid, float x, float y, float z, float orientation)
@@ -2017,6 +2030,22 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         SendTransferAbortedByLockStatus(mEntry,nullptr, AREA_LOCKSTATUS_NOT_ALLOWED);
         return false;
     }
+	
+	// Reset movement history
+    m_movementHistory.clear();
+    
+    // Reset time drift
+    sTimeSyncMgr->ResetForPlayer(this);
+    
+    // Reset movement flags
+    m_movementInfo.ClearTransportData();
+    m_movementInfo.RemoveMovementFlag(MOVEFLAG_MASK_MOVING);
+    
+    // Cancel position corrections
+    m_shouldCorrectPosition = false;
+    
+    // Call parent implementation
+    Unit::TeleportTo(mapid, x, y, z, orientation, options);
 
     // preparing unsummon pet if lost (we must get pet before teleportation or will not find it later)
     Pet* pet = GetPet();

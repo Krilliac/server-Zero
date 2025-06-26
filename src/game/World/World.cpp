@@ -20,6 +20,7 @@ void World::Initialize()
     sMapMgr->Initialize();
     sTransportMgr->Initialize();
 	sTimeSyncMgr->Initialize(); // Initialize time sync system
+	sNetworkHandler->Initialize();
     
     // Load configuration
     ReloadConfig();
@@ -49,6 +50,8 @@ void World::Update(uint32_t diff)
         // Update physics metrics
         m_avgPhysicsError = 0.9f * m_avgPhysicsError + 0.1f * CalculateAvgPhysicsError();
         sMetricTracker.RecordPhysicsError(m_avgPhysicsError);
+		
+		sNetworkHandler->Update(diff);
     }
 }
 

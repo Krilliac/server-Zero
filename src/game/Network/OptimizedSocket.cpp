@@ -73,6 +73,23 @@ bool OptimizedSocket::SendPacket(const WorldPacket& packet)
     return true;
 }
 
+void OptimizedSocket::ProcessUDP(WorldPacket& packet)
+{
+    // Apply Zstd compression for large packets
+    const size_t compressionThreshold = sConfig.GetIntDefault("Network.CompressionThreshold", 128);
+    if (packet.size() > compressionThreshold) {
+        WorldPacket compressed = CompressPacket(packet);
+        SendPacket(compressed);
+    } else {
+        SendPacket(packet);
+    }
+    
+    // Movement prediction reconciliation
+    if (packet.GetOpcode() == MSG_MOVE_HEARTBEAT) {
+        sMovementMgr->ReconcilePosition(_player, packet);
+    }
+}
+
 void OptimizedSocket::Update(uint32 diff)
 {
     // Flush if we have packets and bundler is ready
