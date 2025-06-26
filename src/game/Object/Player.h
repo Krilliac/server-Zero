@@ -72,6 +72,9 @@ typedef std::deque<Mail*> PlayerMails;
 #define PLAYER_MAX_SKILLS           127
 #define PLAYER_EXPLORED_ZONES_SIZE  64
 
+// Maximum movement history size for bot detection
+static constexpr size_t MAX_MOVEMENT_HISTORY = 1000;
+
 // Note: SPELLMOD_* values is aura types in fact
 enum SpellModType
 {
@@ -3908,6 +3911,26 @@ class Player : public Unit
 
         // Reputation manager for the player
         ReputationMgr  m_reputationMgr;
+		
+private:
+    // Movement history for bot detection and position correction
+    struct MovementRecord
+    {
+        Position pos;
+        uint32 timestamp;
+    };
+    std::deque<MovementRecord> m_movementHistory;
+    bool m_shouldCorrectPosition = false;
+    Position m_correctedPosition;
+    uint32 m_botViolations = 0;
+    uint32 m_lastMovementViolation = 0;
+    
+public:
+    // Movement history management
+    void AddMovementRecord(const Position& pos);
+    const std::deque<MovementRecord>& GetMovementHistory() const;
+    void RecordBotViolation();
+    bool IsSuspectedBot() const;
 };
 
 void AddItemsSetItem(Player* player, Item* item);

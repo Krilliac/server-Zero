@@ -37,6 +37,11 @@ public:
     static void FullMovementCheck(Player* player, const MovementInfo& moveInfo);
     
 private:
+    // Bot detection
+    static void DetectMovementSharpness(Player* player);
+    static void AnalyzeMovementRandomness(Player* player);
+    static void DetectBotPatterns(Player* player, const MovementInfo& moveInfo);
+	
     // Physics validation
     static void ValidatePhysics(Player* player, const MovementInfo& moveInfo);
     static void ValidateFallPhysics(Player* player, const MovementInfo& moveInfo);
@@ -63,12 +68,18 @@ private:
     static float GetSpeedTolerance(Player* player, const MovementInfo& moveInfo);
     static UnitMoveType SelectSpeedType(const MovementInfo& moveInfo);
     
-    // Constants
-    static constexpr float GRAVITY = 19.291105f;
-    static constexpr float MAX_Z_DELTA = 5.0f;
-    static constexpr float COLLISION_TOLERANCE = 0.5f;
-    static constexpr float TELEPORT_MULTIPLIER = 1.8f;
-    static constexpr float SPEED_TOLERANCE = 1.25f;
-    static constexpr uint32 FALL_TIME_TOLERANCE = 500;
-    static constexpr float WATER_WALK_HEIGHT = 0.1f;
+	static constexpr float GRAVITY = 19.291105f; // WoW-specific gravity constant (m/s²)
+	static constexpr float MAX_Z_DELTA = 5.0f;   // Max allowed height above terrain (yards)
+	static constexpr float COLLISION_TOLERANCE = 0.5f; // Collision detection threshold (yards)
+	static constexpr float TELEPORT_MULTIPLIER = 1.8f; // Leniency for teleport detection
+	static constexpr float SPEED_TOLERANCE = 1.25f;    // Base speed tolerance (25%)
+	static constexpr uint32 FALL_TIME_TOLERANCE = 500; // Fall time tolerance (ms)
+	static constexpr float WATER_WALK_HEIGHT = 0.1f;   // Water walking tolerance (yards)
+
+	// Bot detection constants
+	static constexpr float GRID_SIZE = 10.0f;          // Bot detection grid size (yards)
+	static constexpr uint32 MIN_WAYPOINTS_FOR_ANALYSIS = 50;
+	static constexpr float BOT_LCP_THRESHOLD = 5.0f;   // LCP score threshold
+	static constexpr float SHARPNESS_THRESHOLD = 0.2f; // 11.5° in radians
+	static constexpr float RANDOMNESS_THRESHOLD = 0.01f; // Angle variance threshold
 };

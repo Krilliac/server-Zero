@@ -39,6 +39,10 @@
 #include "ChannelMgr.h"
 #include "MapManager.h"
 #include "MapPersistentStateMgr.h"
+#include "MovementChecks.h"
+#include "MovementGenerator.h"
+#include "TimeSync/TimeSyncMgr.h"
+#include "AntiCheat/AntiCheatMgr.h"
 #include "InstanceData.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
@@ -1384,6 +1388,9 @@ void Player::Update(uint32 update_diff, uint32 p_time)
 
     // Check duel distance
     CheckDuelDistance(now);
+	
+	// Update player-specific drift
+	sTimeSyncMgr->UpdateForPlayer(this);
 
     // Update items that have just a limited lifetime
     if (now > m_Last_tick)
@@ -1613,6 +1620,37 @@ void Player::Update(uint32 update_diff, uint32 p_time)
     {
         TeleportTo(m_teleport_dest, m_teleport_options);
     }
+	
+	// ================= MOVEMENT VALIDATION HOOK ================= //
+    // Skip movement checks for GMs or during teleportation
+    if (!IsGameMaster() && !IsBeingTeleported() && m_movementInfo.HasMovementFlag())
+	{
+        MovementChecks::FullMovementCheck(this, m_movementInfo);
+    }
+
+    // ================= MOVEMENT HISTORY RECORDING ================= //
+    static uint32 recordTimer = 0;
+    recordTimer += diff;
+    if (recordTimer >= 2000 || m_movementHistory.empty() || 
+        GetDistance(m_movementHistory.back().pos) > 5.0f) 
+	{
+        AddMovementRecord(GetPosition());
+        recordTimer = 0;
+    }
+
+    // ================= POSITION CORRECTION APPLICATION ================= //
+    // (If correction was applied during movement checks)
+    if (m_shouldCorrectPosition) 
+	{
+        TeleportTo(m_correctedPosition);
+        m_shouldCorrectPosition = false;
+    }
+
+    // ================= ANTI-CHEAT MONITORING ================= //
+    if (m_lastMovementViolation + 5000 < WorldTimer::getMSTime()) 
+	{
+        sAnticheatMgr->ValidateMovement(this);
+    }
 
 #ifdef ENABLE_PLAYERBOTS
     // Update player bot AI
@@ -1626,6 +1664,126 @@ void Player::Update(uint32 update_diff, uint32 p_time)
     }
 #endif
 
+}
+
+void Player::AddMovementRecord(const Position& pos)
+{
+    if (m_movementHistory.size() >= MAX_MOVEMENT_HISTORY) {
+        m_movementHistory.pop_front();
+    }
+    m_movementHistory.push_back({pos, WorldTimer::getMSTime()});
+}
+
+const std::deque<Player::MovementRecord>& Player::GetMovementHistory() const
+{
+    return m_movementHistory;
+}
+
+// ================= MOVEMENT SYSTEM INTEGRATION ================= //
+void Player::SetPosition(const Position& pos)
+{
+    // Update position with physics validation
+    float prevZ = GetPositionZ();
+    Unit::SetPosition(pos);
+    
+    // Update falling status
+    if (GetPositionZ() < prevZ && !IsFalling()) {
+        SetFallInformation(0, GetPositionZ());
+    }
+}
+
+void Player::SetMovement(MovementInfo const& moveInfo)
+{
+    m_movementInfo = moveInfo;
+    
+    // Trigger anti-cheat validation
+    sAnticheatMgr->ValidateMovement(this);
+}
+
+// ================= BOT DETECTION INTERFACE ================= //
+bool Player::IsSuspectedBot() const
+{
+    return m_botViolations > 0;
+}
+
+void Player::RecordBotViolation()
+{
+    m_botViolations++;
+    
+    if (m_botViolations > 2) {
+        GetSession()->KickPlayer("Suspected bot behavior");
+    }
+}
+
+void Player::HandleTeleport(uint32 mapid, float x, float y, float z, float orientation)
+{
+    // Reset movement history for bot detection
+    m_movementHistory.clear();
+    
+    // Reset time drift for synchronization
+    sTimeSyncMgr->ResetForPlayer(this);
+    
+    // Reset movement flags and states
+    m_movementInfo.ClearTransportData();
+    m_movementInfo.RemoveMovementFlag(MOVEFLAG_MASK_MOVING);
+    
+    // Cancel any pending movement corrections
+    m_shouldCorrectPosition = false;
+    
+    // Existing teleport handling
+    if (GetMapId() != mapid)
+    {
+        // Map change handling
+        Map* oldMap = GetMap();
+        if (oldMap && oldMap->IsDungeon())
+        {
+            // Dungeon exit logic
+            oldMap->RemovePlayerFromMap(this, false);
+            SetMap(nullptr);
+        }
+
+        // Load new map
+        Map* newMap = sMapMgr->CreateMap(mapid, this);
+        if (!newMap)
+        {
+            sLog.outError("Player::HandleTeleport: Invalid map %d", mapid);
+            return;
+        }
+
+        // Transfer to new map
+        newMap->AddPlayerToMap(this);
+        SetMap(newMap);
+    }
+
+    // Update position
+    Relocate(x, y, z, orientation);
+    SetFallInformation(0, z);  // Reset fall state
+    
+    // Update zone and environment
+    UpdateZone();
+    UpdateEnvironment();
+    
+    // Send position update to client
+    WorldPacket data(MSG_MOVE_TELEPORT, 64);
+    data << GetPackGUID();
+    m_movementInfo.SetMovementFlags(MOVEFLAG_TELEPORT);
+    m_movementInfo.Write(data);
+    SendMessageToSet(data, false);
+    
+    // Send heartbeat to confirm position
+    WorldPacket heartbeat(MSG_MOVE_HEARTBEAT, 64);
+    heartbeat << GetPackGUID();
+    m_movementInfo.Write(heartbeat);
+    SendMessageToSet(heartbeat, false);
+    
+    // Reset movement flags after teleport
+    m_movementInfo.RemoveMovementFlag(MOVEFLAG_TELEPORT);
+}
+
+// ================= TIME SYNCHRONIZATION HELPERS ================= //
+uint32 Player::GetAdjustedTime(uint32 clientTime) const
+{
+    return sTimeSyncMgr->GetAdjustedTime(GetGUID(), clientTime);
 }
 
 void Player::SetDeathState(DeathState s)

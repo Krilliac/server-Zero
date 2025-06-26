@@ -19,6 +19,7 @@ void World::Initialize()
     sHivemind->Initialize(MAIN_WORLD_NODE);
     sMapMgr->Initialize();
     sTransportMgr->Initialize();
+	sTimeSyncMgr->Initialize(); // Initialize time sync system
     
     // Load configuration
     ReloadConfig();

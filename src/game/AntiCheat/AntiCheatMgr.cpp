@@ -1,14 +1,14 @@
 #include "AntiCheatMgr.h"
-#include "PhysicsValidator.h"
-#include "TimeSyncChecks.h"
-#include "MovementChecks.h"
+#include "MovementChecks.h"          // New movement validation system
+#include "TimeSync/TimeSyncMgr.h"    // Time synchronization
 #include "Log.h"
-#include "Config.h"
+#include "Config/Config.h"
 #include "World.h"
 #include "Player.h"
 #include "WardenVisualizer.h"
 #include <ctime>
 #include <algorithm>
+#include <iomanip>
 
 AntiCheatMgr* AntiCheatMgr::instance()
 {
@@ -18,10 +18,16 @@ AntiCheatMgr* AntiCheatMgr::instance()
 
 void AntiCheatMgr::Initialize()
 {
-    m_speedTolerance = sConfig->GetFloatDefault("AntiCheat.SpeedTolerance", 1.2f);
-    m_driftThreshold = sConfig->GetIntDefault("AntiCheat.DriftThreshold", 50);
-    m_maxFallDistance = sConfig->GetFloatDefault("AntiCheat.MaxFallDistance", 50.0f);
-    m_kickThreshold = sConfig->GetIntDefault("AntiCheat.KickThreshold", 5);
+    // Load configuration
+    m_speedTolerance = sConfig.GetFloatDefault("AntiCheat.SpeedTolerance", 1.25f);
+    m_driftThreshold = sConfig.GetIntDefault("AntiCheat.DriftThreshold", 500);
+    m_maxFallDistance = sConfig.GetFloatDefault("AntiCheat.MaxFallDistance", 50.0f);
+    m_kickThreshold = sConfig.GetIntDefault("AntiCheat.KickThreshold", 3);
+    m_botDetectionEnabled = sConfig.GetBoolDefault("AntiCheat.BotDetection", true);
+    
+    // Initialize subsystems
+    MovementChecks::Initialize();
+    TimeSyncMgr::Initialize();
 }
 
 void AntiCheatMgr::Update(uint32 diff)
@@ -45,10 +51,18 @@ void AntiCheatMgr::Update(uint32 diff)
         }
         cleanupTimer = 0;
     }
+    
+    // Update subsystems
+    MovementChecks::Update(diff);
+    TimeSyncMgr::Update(diff);
 }
 
 void AntiCheatMgr::RecordViolation(Player* player, CheatType type, const std::string& details)
 {
+    if (player->IsGameMaster()) {
+        return; // Ignore violations from GMs
+    }
+    
     std::lock_guard<std::mutex> lock(m_violationsMutex);
     ObjectGuid guid = player->GetGUID();
     
@@ -64,12 +78,12 @@ void AntiCheatMgr::RecordViolation(Player* player, CheatType type, const std::st
     m_detectedCheats++;
     
     // Visual feedback for GMs
-    WardenVisualizer::ShowViolation(player, type);
+    if (Player* gm = FindAvailableGM()) {
+        WardenVisualizer::ShowViolation(gm, player, type);
+    }
     
-    // Log with context
-    sLog.outAntiCheat("Violation: %s - %s (Type: %d) at %s",
-        player->GetName(), details.c_str(), static_cast<int>(type),
-        record.location.ToString().c_str());
+    // Detailed logging
+    LogViolation(player, record);
     
     // Handle based on severity
     HandleViolation(player, type);
@@ -83,31 +97,25 @@ void AntiCheatMgr::HandleViolation(Player* player, CheatType type)
         case CHEAT_TELEPORT_HACK:
         case CHEAT_FLY_HACK:
         case CHEAT_PHYSICS_HACK:
+        case CHEAT_BOT:  // Added bot detection
             ApplyPenalty(player, type);
             break;
             
         // Moderate cheats: check frequency
         case CHEAT_SPEED_HACK:
         case CHEAT_SWIMMING_HACK:
+        case CHEAT_TIME_DESYNC:
         {
-            uint32 recentCount = 0;
-            auto& records = m_violations[player->GetGUID()];
-            const uint32 now = static_cast<uint32>(std::time(nullptr));
-            
-            for (auto rit = records.rbegin(); rit != records.rend(); ++rit) {
-                if (rit->type != type) continue;
-                if ((now - rit->timestamp) > 60) break; // Only last minute
-                if (++recentCount >= m_kickThreshold) {
-                    ApplyPenalty(player, type);
-                    break;
-                }
+            uint32 recentCount = CountRecentViolations(player, type, 60); // Last minute
+            if (recentCount >= m_kickThreshold) {
+                ApplyPenalty(player, type);
             }
             break;
         }
             
         // Minor cheats: warning only
-        case CHEAT_TIME_DESYNC:
-            player->SendSystemMessage("Time synchronization anomaly detected.");
+        case CHEAT_WALL_CLIMB:
+            player->SendSystemMessage("Collision anomaly detected.");
             break;
             
         default:
@@ -127,9 +135,10 @@ void AntiCheatMgr::ApplyPenalty(Player* player, CheatType type)
         case CHEAT_TELEPORT_HACK:
         case CHEAT_FLY_HACK:
         case CHEAT_PHYSICS_HACK:
-            player->GetSession()->KickPlayer();
-            sLog.outAntiCheat("Kicked player %s for severe cheat (Type: %d)",
-                player->GetName(), static_cast<int>(type));
+        case CHEAT_BOT:  // Bot detection penalty
+            player->GetSession()->KickPlayer("Severe cheat detected");
+            sLog.outAntiCheat("Kicked player %s for severe cheat (Type: %s)",
+                player->GetName(), CheatTypeToString(type));
             break;
             
         case CHEAT_SWIMMING_HACK:
@@ -137,60 +146,92 @@ void AntiCheatMgr::ApplyPenalty(Player* player, CheatType type)
             player->SendSystemMessage("Swimming anomaly detected. Movement restricted.");
             break;
             
+        case CHEAT_TIME_DESYNC:
+            sTimeSyncMgr->ResetForPlayer(player); // Re-sync time
+            player->SendSystemMessage("Time synchronization reset.");
+            break;
+            
         default:
             break;
     }
 }
 
-const std::vector<CheatRecord>& AntiCheatMgr::GetViolations(Player* player) const
+void AntiCheatMgr::ValidateMovement(Player* player)
 {
-    static std::vector<CheatRecord> empty;
-    std::lock_guard<std::mutex> lock(m_violationsMutex);
+    /**
+     * Comprehensive movement validation entry point:
+     * 1. Time synchronization
+     * 2. Physics validation
+     * 3. Anti-cheat checks
+     */
+    if (player->IsGameMaster() || player->IsBeingTeleported()) {
+        return;
+    }
     
-    auto it = m_violations.find(player->GetGUID());
-    return it != m_violations.end() ? it->second : empty;
-}
-
-uint32 AntiCheatMgr::GetTotalViolations() const
-{
-    return m_totalViolations;
-}
-
-float AntiCheatMgr::GetDetectionRate() const
-{
-    // Simplified metric: detected cheats vs total players
-    uint32 playerCount = sWorld->GetPlayerCount();
-    if (playerCount == 0) return 0.0f;
+    // 1. Time synchronization check
+    uint32 clientTime = player->GetMovementInfo().GetTime();
+    if (!sTimeSyncMgr->ValidateMovementTime(player, clientTime)) {
+        int32 drift = sTimeSyncMgr->GetTimeDrift(player->GetGUID());
+        RecordViolation(player, CHEAT_TIME_DESYNC, 
+            fmt::format("Time drift: {}ms", drift));
+    }
     
-    return (static_cast<float>(m_detectedCheats) / playerCount) * 100.0f;
+    // 2. Core movement validation
+    MovementChecks::FullMovementCheck(player, player->GetMovementInfo());
 }
 
-void AntiCheatMgr::ClearViolations(Player* player)
+// ================= HELPER FUNCTIONS ================= //
+
+uint32 AntiCheatMgr::CountRecentViolations(Player* player, CheatType type, uint32 seconds) const
 {
-    std::lock_guard<std::mutex> lock(m_violationsMutex);
-    m_violations.erase(player->GetGUID());
+    uint32 count = 0;
+    const auto& records = m_violations.at(player->GetGUID());
+    const uint32 now = static_cast<uint32>(std::time(nullptr));
+    
+    for (auto rit = records.rbegin(); rit != records.rend(); ++rit) {
+        if (rit->type != type) continue;
+        if ((now - rit->timestamp) > seconds) break;
+        count++;
+    }
+    return count;
+}
+
+Player* AntiCheatMgr::FindAvailableGM() const
+{
+    for (auto& [guid, player] : sWorld->GetPlayers()) {
+        if (player->IsGameMaster() && player->IsVisible()) {
+            return player;
+        }
+    }
+    return nullptr;
 }
 
 void AntiCheatMgr::LogViolation(Player* player, const CheatRecord& record)
 {
-    sLog.outAntiCheat("[%s] %s: %s",
+    std::ostringstream oss;
+    oss << std::put_time(std::localtime(&record.timestamp), "%Y-%m-%d %H:%M:%S");
+    
+    sLog.outAntiCheat("[%s] %s: %s at %s (Map: %u, Zone: %u)",
+        oss.str().c_str(),
         player->GetName(),
         CheatTypeToString(record.type),
-        record.details.c_str());
+        record.details.c_str(),
+        player->GetMapId(),
+        player->GetZoneId());
 }
 
-// Helper function (would be in a separate utils file)
-const char* CheatTypeToString(CheatType type)
+const char* AntiCheatMgr::CheatTypeToString(CheatType type)
 {
     switch (type) {
-        case CHEAT_SPEED_HACK: return "SpeedHack";
-        case CHEAT_TELEPORT_HACK: return "TeleportHack";
-        case CHEAT_WALL_CLIMB: return "WallClimb";
-        case CHEAT_FLY_HACK: return "FlyHack";
-        case CHEAT_TIME_DESYNC: return "TimeDesync";
-        case CHEAT_SWIMMING_HACK: return "SwimmingHack";
-        case CHEAT_PHYSICS_HACK: return "PhysicsHack";
-        case CHEAT_SPELL_HACK: return "SpellHack";
-        default: return "Unknown";
+        case CHEAT_SPEED_HACK:       return "SpeedHack";
+        case CHEAT_TELEPORT_HACK:    return "TeleportHack";
+        case CHEAT_WALL_CLIMB:       return "WallClimb";
+        case CHEAT_FLY_HACK:         return "FlyHack";
+        case CHEAT_TIME_DESYNC:      return "TimeDesync";
+        case CHEAT_SWIMMING_HACK:    return "SwimmingHack";
+        case CHEAT_PHYSICS_HACK:     return "PhysicsHack";
+        case CHEAT_SPELL_HACK:       return "SpellHack";
+        case CHEAT_BOT:              return "BotPattern"; // New bot detection
+        default:                     return "Unknown";
     }
 }
