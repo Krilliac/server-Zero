@@ -954,6 +954,29 @@ void InitializeOpcodes()
     OPCODE(CMSG_ACCEPT_LEVEL_GRANT,                        STATUS_NEVER,    PROCESS_INPLACE,      &WorldSession::Handle_NULL);     /// 0x41F: @TODO need to check usage in vanilla WoW
     OPCODE(SMSG_REFER_A_FRIEND_FAILURE,                    STATUS_NEVER,    PROCESS_INPLACE,      &WorldSession::Handle_ServerSide);       /// 0x420: @TODO need to check usage in vanilla WoW
     OPCODE(SMSG_SUMMON_CANCEL,                             STATUS_NEVER,    PROCESS_INPLACE,      &WorldSession::Handle_ServerSide);       /// 0x423: @TODO need to check usage in vanilla WoW
+	
+	// ====================== CLUSTER COMMUNICATION OPCODES ======================
+	// These opcodes are for INTERNAL SERVER-TO-SERVER communication only
+	// They are never sent to game clients and don't require client modifications
+
+	// Cluster heartbeat monitoring
+	OPCODE(CMSG_CLUSTER_HEARTBEAT, 						   STATUS_NEVER, 	PROCESS_INPLACE, 	  &WorldSession::Handle_ServerSide);
+	// Purpose: Periodic node health checks
+	// Why: Replaces string-based heartbeats with efficient binary protocol
+	// Data: Node status, timestamp, load metrics
+
+	// Player migration initiation
+	OPCODE(CMSG_CLUSTER_PLAYER_MIGRATE, 				   STATUS_NEVER, 	PROCESS_INPLACE, 	  &WorldSession::Handle_ServerSide);
+	// Purpose: Request player transfer between nodes
+	// Why: Signals target node to prepare for player state transfer
+	// Data: Player GUID, target node ID, migration timestamp
+
+	// Player state transfer
+	OPCODE(SMSG_CLUSTER_PLAYER_DATA, 					   STATUS_NEVER, 	PROCESS_INPLACE, 	  &WorldSession::Handle_ServerSide);
+	// Purpose: Serialized player state transmission
+	// Why: Carries actual player data during migration
+	// Data: Serialized player state (position, stats, equipment, etc.)
+	// ====================== END CLUSTER OPCODES ======================
 
     return;
 };

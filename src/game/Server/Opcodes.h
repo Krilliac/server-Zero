@@ -959,10 +959,16 @@ enum OpcodesList
     CMSG_ACCEPT_LEVEL_GRANT                         = 0x41F,
     SMSG_REFER_A_FRIEND_FAILURE                     = 0x420,
     SMSG_SUMMON_CANCEL                              = 0x423
+	// ====================== CLUSTER INTERNAL OPCODES ======================
+    // Range: 0x7000-0x7FFF (reserved for internal cluster communication)
+    CMSG_CLUSTER_HEARTBEAT       					= 0x7000,  // Node health monitoring
+    CMSG_CLUSTER_PLAYER_MIGRATE  					= 0x7001,  // Player migration request
+    SMSG_CLUSTER_PLAYER_DATA     					= 0x7002  // Serialized player state
+    // ====================== END CLUSTER OPCODES ======================
 };
 
 // Don't forget to change this value and add opcode name to Opcodes.cpp when you add new opcode!
-#define NUM_MSG_TYPES 0x424
+#define NUM_MSG_TYPES 0x427
 
 extern void InitializeOpcodes();
 

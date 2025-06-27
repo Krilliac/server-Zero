@@ -1,8 +1,10 @@
 #pragma once
 #include "WorldNode.h"
+#include "ObjectGuid.h"
 #include <unordered_map>
 #include <shared_mutex>
 #include <vector>
+#include <limits>
 
 class Player;
 class WorldNode;
@@ -17,35 +19,37 @@ public:
 
     void AddNode(WorldNode* node);
     void RemoveNode(uint32 nodeId);
+    void UpdateNodeStatus(uint32 nodeId, bool online, uint32 latency);
 
     bool MigratePlayer(Player* player, uint32 targetNodeId);
-    void FinalizeMigration(Player* player, uint32 sourceNodeId);
+    void AddPlayer(Player* player);
+    void RemovePlayer(Player* player);
+    uint32 RebalancePlayers();
 
     uint32 GetOptimalNodeFor(Player* player) const;
     uint32 GetPlayerCount(uint32 nodeId) const;
     std::vector<uint32> GetNodeIds() const;
-    uint32 GetMigrationCount(uint32 nodeId) const;
     bool IsNodeOnline(uint32 nodeId) const;
 
 private:
     struct NodeData {
-        WorldNode* node;
-        uint32 playerCount;
-        uint32 latency; // ms to master
-        uint32 migrations;
-        bool online;
+        WorldNode* node = nullptr;
+        uint32 playerCount = 0;
+        uint32 latency = 0;  // ms to master
+        bool online = false;
     };
 
-    void TransferPlayerState(Player* player, WorldNode* targetNode);
+    uint32 FindUnderloadedNode() const;
 
     std::unordered_map<uint32, NodeData> m_nodes;
     std::unordered_map<ObjectGuid, uint32> m_playerNodeMap;
     uint32 m_masterNodeId = 1;
 
-    // Config defaults (overridable)
-    uint32 m_migrationTimeout = 140; // ms
-    uint32 m_maxPlayersPerNode = 5000;
-    uint32 m_rebalanceInterval = 30000; // ms
+    // Configurable values
+    uint32 m_migrationTimeout = 5000;      // ms
+    uint32 m_maxPlayersPerNode = 500;
+    uint32 m_rebalanceInterval = 30000;    // ms
+    uint32 m_rebalanceBatchSize = 5;
 
     mutable std::shared_mutex m_lock;
 };

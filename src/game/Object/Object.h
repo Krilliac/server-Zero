@@ -136,6 +136,7 @@ class Object
 {
     public:
         virtual ~Object();
+		void SetObjectGuid(ObjectGuid guid) { GetGuid() = guid; }
 
         const bool& IsInWorld() const { return m_inWorld; }
         virtual void AddToWorld()

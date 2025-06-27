@@ -40,6 +40,8 @@
 #include "Util.h"
 #include "GridNotifiersImpl.h"
 #include "CellImpl.h"
+#include "Cluster/ClusterMgr.h"
+#include "Cluster/ClusterMessage.h"
 #ifdef ENABLE_ELUNA
 #include "LuaEngine.h"
 #endif /* ENABLE_ELUNA */
@@ -85,9 +87,195 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
 {
     uint32 type;
     uint32 lang;
+    std::string msg;
 
-    recv_data >> type;
-    recv_data >> lang;
+    recv_data >> type >> lang >> msg;
+
+    // ====================== BASIC VALIDATION ======================
+    if (msg.empty()) return;
+    if (type >= MAX_CHAT_MSG_TYPE)
+    {
+        sLog.outError("CHAT: Wrong message type received: %u", type);
+        return;
+    }
+
+    // ====================== SECURITY & SANITY CHECKS ======================
+    if (!processChatmessageFurtherAfterSecurityChecks(msg, lang)) return;
+    
+    // Language validation
+    LanguageDesc const* langDesc = GetLanguageDescByID(lang);
+    if (!langDesc)
+    {
+        SendNotification(LANG_UNKNOWN_LANGUAGE);
+        return;
+    }
+
+    // ====================== LOCAL CHAT PROCESSING ======================
+    #ifdef ENABLE_ELUNA
+    if (Eluna* e = sWorld.GetEluna())
+    {
+        if (!e->OnChat(GetPlayer(), type, lang, msg)) return;
+    }
+    #endif
+
+    switch (type)
+    {
+        case CHAT_MSG_SAY:
+            GetPlayer()->Say(msg, lang);
+            
+            // ================= CLUSTER BROADCAST =================
+            if (sConfig.GetBoolDefault("Cluster.EnableChat", false))
+            {
+                WorldPacket data;
+                ChatHandler::BuildChatPacket(data, CHAT_MSG_SAY, msg.c_str(), 
+                    Language(lang), _player->GetChatTag(), 
+                    _player->GetObjectGuid(), _player->GetName());
+                
+                ClusterMessage clusterMsg;
+                clusterMsg.type = CLUSTER_MSG_CHAT;
+                clusterMsg.sourceNode = sClusterMgr->GetNodeId();
+                clusterMsg.payload.assign(data.contents(), data.contents() + data.size());
+                sClusterMgr->BroadcastMessage(clusterMsg);
+            }
+            break;
+            
+        case CHAT_MSG_YELL:
+            GetPlayer()->Yell(msg, lang);
+            
+            // ================= CLUSTER BROADCAST =================
+            if (sConfig.GetBoolDefault("Cluster.EnableChat", false))
+            {
+                WorldPacket data;
+                ChatHandler::BuildChatPacket(data, CHAT_MSG_YELL, msg.c_str(), 
+                    Language(lang), _player->GetChatTag(), 
+                    _player->GetObjectGuid(), _player->GetName());
+                
+                ClusterMessage clusterMsg;
+                clusterMsg.type = CLUSTER_MSG_CHAT;
+                clusterMsg.sourceNode = sClusterMgr->GetNodeId();
+                clusterMsg.payload.assign(data.contents(), data.contents() + data.size());
+                sClusterMgr->BroadcastMessage(clusterMsg);
+            }
+            break;
+            
+        case CHAT_MSG_GUILD:
+            GetPlayer()->GuildSay(msg, lang);
+            
+            // ================= CLUSTER BROADCAST =================
+            if (sConfig.GetBoolDefault("Cluster.EnableChat", false))
+            {
+                WorldPacket data;
+                ChatHandler::BuildChatPacket(data, CHAT_MSG_GUILD, msg.c_str(), 
+                    Language(lang), _player->GetChatTag(), 
+                    _player->GetObjectGuid(), _player->GetName());
+                
+                ClusterMessage clusterMsg;
+                clusterMsg.type = CLUSTER_MSG_CHAT;
+                clusterMsg.sourceNode = sClusterMgr->GetNodeId();
+                clusterMsg.payload.assign(data.contents(), data.contents() + data.size());
+                sClusterMgr->BroadcastMessage(clusterMsg);
+            }
+            break;
+            
+        case CHAT_MSG_OFFICER:
+            GetPlayer()->OfficerSay(msg, lang);
+            
+            // ================= CLUSTER BROADCAST =================
+            if (sConfig.GetBoolDefault("Cluster.EnableChat", false))
+            {
+                WorldPacket data;
+                ChatHandler::BuildChatPacket(data, CHAT_MSG_OFFICER, msg.c_str(), 
+                    Language(lang), _player->GetChatTag(), 
+                    _player->GetObjectGuid(), _player->GetName());
+                
+                ClusterMessage clusterMsg;
+                clusterMsg.type = CLUSTER_MSG_CHAT;
+                clusterMsg.sourceNode = sClusterMgr->GetNodeId();
+                clusterMsg.payload.assign(data.contents(), data.contents() + data.size());
+                sClusterMgr->BroadcastMessage(clusterMsg);
+            }
+            break;
+            
+        case CHAT_MSG_CHANNEL:
+        {
+            std::string channelName;
+            recv_data >> channelName;
+            if (Channel* chn = ChannelMgr::GetChannelForPlayerByNamePart(channelName, _player))
+                chn->Say(_player->GetObjectGuid(), msg.c_str(), lang);
+            break;
+        }
+        
+        case CHAT_MSG_WHISPER:
+        {
+            std::string to;
+            recv_data >> to;
+            if (!normalizePlayerName(to)) return;
+            GetPlayer()->Whisper(msg, lang, to.c_str());
+            break;
+        }
+        
+        case CHAT_MSG_PARTY:
+        {
+            if (Group* group = GetPlayer()->GetGroup())
+                group->BroadcastToGroup(this, msg, lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL);
+            break;
+        }
+        
+        case CHAT_MSG_RAID:
+        {
+            if (Group* group = GetPlayer()->GetGroup())
+                if (group->isRaidGroup())
+                    group->BroadcastToGroup(this, msg, lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL);
+            break;
+        }
+        
+        case CHAT_MSG_RAID_LEADER:
+        {
+            if (Group* group = GetPlayer()->GetGroup())
+                if (group->isRaidGroup() && group->IsLeader(_player->GetObjectGuid()))
+                    group->BroadcastToGroup(this, msg, lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL);
+            break;
+        }
+        
+        case CHAT_MSG_RAID_WARNING:
+        {
+            if (Group* group = GetPlayer()->GetGroup())
+                if (group->isRaidGroup() && 
+                    (group->IsLeader(_player->GetObjectGuid()) || group->IsAssistant(_player->GetObjectGuid())))
+                    group->BroadcastToGroup(this, msg, lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL);
+            break;
+        }
+        
+        case CHAT_MSG_BATTLEGROUND:
+        {
+            if (Group* group = GetPlayer()->GetGroup())
+                if (group->isBGGroup())
+                    group->BroadcastToGroup(this, msg, lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL);
+            break;
+        }
+        
+        case CHAT_MSG_AFK:
+        {
+            if (!_player->IsInCombat())
+                _player->ToggleAFK(msg);
+            break;
+        }
+        
+        case CHAT_MSG_DND:
+        {
+            _player->ToggleDND(msg);
+            break;
+        }
+        
+        case CHAT_MSG_EMOTE:
+            GetPlayer()->TextEmote(msg);
+            break;
+            
+        default:
+            sLog.outError("Unhandled chat type: %u", type);
+            break;
+    }
+}
 
     if (type >= MAX_CHAT_MSG_TYPE)
     {

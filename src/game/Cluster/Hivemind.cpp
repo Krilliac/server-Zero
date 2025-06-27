@@ -3,9 +3,11 @@
 #include "Player.h"
 #include "WorldSession.h"
 #include "Log.h"
-#include "Config.h"
+#include "Config/Config.h"
 #include "ClusterDefines.h"
 #include "ObjectAccessor.h"
+#include "Cluster/ClusterMgr.h"
+#include <limits>
 
 Hivemind* Hivemind::instance()
 {
@@ -16,15 +18,16 @@ Hivemind* Hivemind::instance()
 void Hivemind::Initialize(uint32 masterNodeId)
 {
     m_masterNodeId = masterNodeId;
-    m_migrationTimeout = sConfig->GetIntDefault("Cluster.MigrationTimeout", 140);
-    m_maxPlayersPerNode = sConfig->GetIntDefault("Cluster.MaxPlayersPerNode", 5000);
-    m_rebalanceInterval = sConfig->GetIntDefault("Cluster.RebalanceInterval", 30000);
+    m_migrationTimeout = sConfig.GetIntDefault("Cluster.MigrationTimeout", 5000);
+    m_maxPlayersPerNode = sConfig.GetIntDefault("Cluster.MaxPlayersPerNode", 500);
+    m_rebalanceInterval = sConfig.GetIntDefault("Cluster.RebalanceInterval", 30000);
+    m_rebalanceBatchSize = sConfig.GetIntDefault("Cluster.RebalanceBatchSize", 5);
 }
 
 void Hivemind::AddNode(WorldNode* node)
 {
     std::unique_lock lock(m_lock);
-    m_nodes[node->GetNodeId()] = { node, 0, 0, 0, true };
+    m_nodes[node->GetNodeId()] = { node, 0, 0, true };
 }
 
 void Hivemind::RemoveNode(uint32 nodeId)
@@ -52,58 +55,51 @@ uint32 Hivemind::GetOptimalNodeFor(Player* player) const
 
 bool Hivemind::MigratePlayer(Player* player, uint32 targetNodeId)
 {
-    std::unique_lock lock(m_lock);
-    auto targetIt = m_nodes.find(targetNodeId);
-    if (targetIt == m_nodes.end() || !targetIt->second.online) return false;
-    if (targetIt->second.playerCount >= m_maxPlayersPerNode) return false;
+    if (!player || !player->IsInWorld()) return false;
 
-    WorldNode* targetNode = targetIt->second.node;
-    TransferPlayerState(player, targetNode);
+    // Update player-node mapping immediately
+    {
+        std::unique_lock lock(m_lock);
+        m_playerNodeMap[player->GetGUID()] = targetNodeId;
+    }
 
-    uint32 sourceNodeId = m_playerNodeMap[player->GetGUID()];
-    m_playerNodeMap[player->GetGUID()] = targetNodeId;
-
-    // Schedule migration finalization (simulate atomic transfer)
-    player->AddDelayedEvent(m_migrationTimeout, [this, player, sourceNodeId]() {
-        FinalizeMigration(player, sourceNodeId);
-    });
-
+    // Initiate migration
+    player->MigrateToNode(targetNodeId);
     return true;
 }
 
-void Hivemind::TransferPlayerState(Player* player, WorldNode* targetNode)
+void Hivemind::AddPlayer(Player* player)
 {
-    // Serialize player state (compressed)
-    ByteBuffer stateBuffer;
-    player->SerializeForTransfer(stateBuffer);
+    if (!player) return;
 
-    // In production, compress with Snappy/Zstd
-    // Send to target node (network code abstracted)
-    targetNode->TransferPlayer(player->GetGUID(), stateBuffer);
-
-    // Notify player to reconnect
-    WorldPacket data(SMSG_TRANSFER_PENDING, 4);
-    data << uint32(targetNode->GetAddress());
-    player->GetSession()->SendPacket(&data);
+    std::unique_lock lock(m_lock);
+    uint32 nodeId = player->GetNodeId();
+    
+    // Initialize player-node mapping
+    m_playerNodeMap[player->GetGUID()] = nodeId;
+    
+    // Update node player count
+    auto it = m_nodes.find(nodeId);
+    if (it != m_nodes.end()) {
+        it->second.playerCount++;
+    }
 }
 
-void Hivemind::FinalizeMigration(Player* player, uint32 sourceNodeId)
+void Hivemind::RemovePlayer(Player* player)
 {
+    if (!player) return;
+
     std::unique_lock lock(m_lock);
-
-    // Remove from source node
-    if (auto sourceIt = m_nodes.find(sourceNodeId); sourceIt != m_nodes.end()) {
-        if (sourceIt->second.playerCount > 0)
-            sourceIt->second.playerCount--;
+    ObjectGuid guid = player->GetGUID();
+    
+    // Update node player count
+    auto nodeIt = m_nodes.find(player->GetNodeId());
+    if (nodeIt != m_nodes.end() && nodeIt->second.playerCount > 0) {
+        nodeIt->second.playerCount--;
     }
-
-    // Add to target node
-    uint32 targetNodeId = m_playerNodeMap[player->GetGUID()];
-    if (auto targetIt = m_nodes.find(targetNodeId); targetIt != m_nodes.end()) {
-        targetIt->second.playerCount++;
-        targetIt->second.migrations++;
-    }
-    // Visual feedback, metrics, etc. can be added here
+    
+    // Remove player mapping
+    m_playerNodeMap.erase(guid);
 }
 
 void Hivemind::Update(uint32 diff)
@@ -112,9 +108,64 @@ void Hivemind::Update(uint32 diff)
     rebalanceTimer += diff;
 
     if (rebalanceTimer >= m_rebalanceInterval) {
-        // Auto-rebalance logic can be implemented here
+        RebalancePlayers();
         rebalanceTimer = 0;
     }
+}
+
+uint32 Hivemind::RebalancePlayers()
+{
+    uint32 migrated = 0;
+    uint32 targetNode = 0;
+    std::vector<ObjectGuid> playersToMigrate;
+
+    // Phase 1: Identify migration candidates while locked
+    {
+        std::shared_lock lock(m_lock);
+        
+        // Find the most underloaded node
+        uint32 minLoad = std::numeric_limits<uint32>::max();
+        for (const auto& [nodeId, data] : m_nodes) {
+            if (!data.online) continue;
+            if (data.playerCount < minLoad) {
+                minLoad = data.playerCount;
+                targetNode = nodeId;
+            }
+        }
+        
+        // No valid target node found
+        if (targetNode == 0) return 0;
+        
+        // Identify overloaded nodes
+        for (const auto& [nodeId, nodeData] : m_nodes) {
+            if (!nodeData.online || nodeData.playerCount <= m_maxPlayersPerNode * 0.8) 
+                continue;
+                
+            // Collect players from this node
+            uint32 collected = 0;
+            for (const auto& [guid, assignedNode] : m_playerNodeMap) {
+                if (assignedNode == nodeId) {
+                    playersToMigrate.push_back(guid);
+                    if (++collected >= m_rebalanceBatchSize) break;
+                }
+            }
+        }
+    }
+
+    // Phase 2: Migrate players without lock
+    for (const ObjectGuid& guid : playersToMigrate) {
+        if (Player* player = ObjectAccessor::FindPlayer(guid)) {
+            // Skip players in invalid states
+            if (player->IsInCombat() || player->IsInFlight() || player->IsDead()) 
+                continue;
+                
+            if (MigratePlayer(player, targetNode)) {
+                migrated++;
+            }
+        }
+    }
+    
+    return migrated;
 }
 
 uint32 Hivemind::GetPlayerCount(uint32 nodeId) const
@@ -133,16 +184,19 @@ std::vector<uint32> Hivemind::GetNodeIds() const
     return ids;
 }
 
-uint32 Hivemind::GetMigrationCount(uint32 nodeId) const
-{
-    std::shared_lock lock(m_lock);
-    auto it = m_nodes.find(nodeId);
-    return it != m_nodes.end() ? it->second.migrations : 0;
-}
-
 bool Hivemind::IsNodeOnline(uint32 nodeId) const
 {
     std::shared_lock lock(m_lock);
     auto it = m_nodes.find(nodeId);
     return it != m_nodes.end() && it->second.online;
+}
+
+void Hivemind::UpdateNodeStatus(uint32 nodeId, bool online, uint32 latency)
+{
+    std::unique_lock lock(m_lock);
+    auto it = m_nodes.find(nodeId);
+    if (it != m_nodes.end()) {
+        it->second.online = online;
+        it->second.latency = latency;
+    }
 }

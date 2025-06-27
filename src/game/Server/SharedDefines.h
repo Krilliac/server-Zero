@@ -2630,4 +2630,9 @@ enum SpellEntriesConsts
     SPELL_GM_FREEZE                         = 9454,
 };
 
+// Internal server opcodes (never sent to clients)
+#define CMSG_CLUSTER_HEARTBEAT       0x7000
+#define CMSG_CLUSTER_PLAYER_MIGRATE  0x7001
+#define SMSG_CLUSTER_PLAYER_DATA     0x7002
+
 #endif

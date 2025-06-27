@@ -43,6 +43,8 @@
 #include "MovementGenerator.h"
 #include "TimeSync/TimeSyncMgr.h"
 #include "AntiCheat/AntiCheatMgr.h"
+#include "Cluster/ClusterMgr.h"
+#include "Cluster/ClusterMessage.h"
 #include "InstanceData.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
@@ -1791,6 +1793,276 @@ void Player::HandleTeleport(uint32 mapid, float x, float y, float z, float orien
     
     // Reset movement flags after teleport
     m_movementInfo.RemoveMovementFlag(MOVEFLAG_TELEPORT);
+}
+
+// ================= CLUSTER MIGRATION ================= //
+void Player::MigrateToNode(uint32_t newNodeId)
+{
+    // Serialize critical player state
+    WorldPacket data(SMSG_PLAYER_MIGRATION, 4096); // Use sufficient size
+    
+    // Core identity and position
+    data << GetGUID();
+    data << GetName();
+    data << GetPositionX() << GetPositionY() << GetPositionZ();
+    data << GetOrientation();
+    data << GetMapId();
+    data << GetZoneId();
+    data << GetAreaId();
+    
+    // Vital stats
+    data << GetHealth();
+    data << GetPower(POWER_MANA);
+    data << GetLevel();
+    data << GetRace();
+    data << GetClass();
+    data << GetGender();
+    data << GetXP();
+    data << GetMoney();
+    
+    // Honor and PvP
+    data << GetTotalHonorPoints();
+    data << GetArenaPoints();
+    data << GetTotalKills();
+    
+    // Max stats
+    data << GetMaxHealth();
+    data << GetMaxPower(POWER_MANA);
+    
+    // Equipment and inventory
+    data << GetEquipmentSetId();
+    for (uint8 i = 0; i < EQUIPMENT_SLOT_END; i++)
+    {
+        if (Item* item = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+        {
+            data << uint8(1); // Item exists marker
+            data << item->GetEntry();
+            data << item->GetCount();
+            data << item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT);
+            // Add more item fields as needed
+        }
+        else
+        {
+            data << uint8(0); // Empty slot marker
+        }
+    }
+    
+    // Spells and talents
+    data << uint32(GetSpellMap().size());
+    for (auto& spell : GetSpellMap())
+        data << spell.first; // Spell ID
+    
+    // Auras
+    data << uint32(GetAuras().size());
+    for (Aura const* aura : GetAuras())
+    {
+        data << aura->GetId();
+        data << aura->GetStackAmount();
+        data << aura->GetDuration();
+    }
+    
+    // Quests
+    data << uint32(GetQuestStatusMap().size());
+    for (auto& quest : GetQuestStatusMap())
+    {
+        data << quest.first; // Quest ID
+        data << quest.second.m_status;
+        data << quest.second.m_rewarded;
+    }
+    
+    // Reputation
+    data << uint32(GetReputation().size());
+    for (auto& rep : GetReputation())
+    {
+        data << rep.first; // Faction ID
+        data << rep.second.standing;
+        data << rep.second.flags;
+    }
+    
+    // Action bars
+    for (uint8 i = 0; i < MAX_ACTION_BAR_INDEX; i++)
+    {
+        data << GetActionButton(i);
+    }
+    
+    // Skills
+    data << uint32(GetSkillMap().size());
+    for (auto& skill : GetSkillMap())
+    {
+        data << skill.first; // Skill ID
+        data << skill.second;
+    }
+    
+    // Movement info
+    data << m_movementInfo.GetMovementFlags();
+    data << m_movementInfo.GetTransportGuid();
+    data << m_movementInfo.GetTransportPos()->x;
+    data << m_movementInfo.GetTransportPos()->y;
+    data << m_movementInfo.GetTransportPos()->z;
+    data << m_movementInfo.GetTransportPos()->o;
+    data << m_movementInfo.GetFallTime();
+    
+    // Add more fields as needed
+
+    // Prepare cluster message
+    /*ClusterMessage msg;
+    msg.type = CLUSTER_MSG_PLAYER_MIGRATION;
+    msg.sourceNode = sClusterMgr->GetNodeId();
+    msg.targetNode = std::to_string(newNodeId);
+    msg.payload.assign(data.contents(), data.contents() + data.size());
+
+    sClusterMgr->SendToNode(std::to_string(newNodeId), msg);
+    GetSession()->KickPlayer("Cluster migration", true);*/
+	
+	// Prepare cluster message
+    WorldPacket data(SMSG_CLUSTER_PLAYER_DATA, buffer.size());
+    data.append(buffer);
+
+    ClusterMessage msg;
+    msg.type = CMSG_CLUSTER_PLAYER_MIGRATE;
+    msg.sourceNode = sClusterMgr->GetNodeId();
+    msg.targetNode = std::to_string(newNodeId);
+    msg.payload.assign(data.contents(), data.contents() + data.size());
+
+    sClusterMgr->SendToNode(std::to_string(newNodeId), msg);
+    GetSession()->KickPlayer("Cluster migration", true);
+}
+
+void Player::LoadFromMigrationData(WorldPacket& data)
+{
+    // Deserialize core state
+    ObjectGuid guid;
+    std::string name;
+    float x, y, z, o;
+    uint32 mapId, zoneId, areaId;
+    uint32 health, mana, level, race, class_, gender;
+    uint32 xp, money, totalHonor, arenaPoints, totalKills;
+    uint32 maxHealth, maxMana, equipmentSetId;
+    
+    data >> guid >> name >> x >> y >> z >> o >> mapId >> zoneId >> areaId;
+    data >> health >> mana >> level >> race >> class_ >> gender;
+    data >> xp >> money >> totalHonor >> arenaPoints >> totalKills;
+    data >> maxHealth >> maxMana >> equipmentSetId;
+    
+    // Set core properties
+    SetGuid(guid); // Use new Object::SetGuid()
+    SetName(name);
+    Relocate(x, y, z, o);
+    SetMapId(mapId);
+    SetZoneId(zoneId);
+    SetAreaId(areaId);
+    SetHealth(health);
+    SetPower(POWER_MANA, mana);
+    SetLevel(level);
+    SetRace(race);
+    SetClass(class_);
+    SetGender(gender);
+    SetXP(xp);
+    SetMoney(money);
+    SetTotalHonorPoints(totalHonor);
+    SetArenaPoints(arenaPoints);
+    SetTotalKills(totalKills);
+    SetMaxHealth(maxHealth);
+    SetMaxPower(POWER_MANA, maxMana);
+    SetEquipmentSetId(equipmentSetId);
+    
+    // Deserialize equipment
+    for (uint8 i = 0; i < EQUIPMENT_SLOT_END; i++)
+    {
+        uint8 itemExists;
+        data >> itemExists;
+        if (itemExists)
+        {
+            uint32 entry, count, enchantId;
+            data >> entry >> count >> enchantId;
+            
+            if (Item* item = Item::CreateItem(entry, count, this))
+            {
+                if (enchantId)
+                    item->SetEnchantment(PERM_ENCHANTMENT_SLOT, enchantId, 0, 0);
+                EquipItem(i, item);
+            }
+        }
+    }
+    
+    // Deserialize spells
+    uint32 spellCount;
+    data >> spellCount;
+    for (uint32 i = 0; i < spellCount; i++)
+    {
+        uint32 spellId;
+        data >> spellId;
+        LearnSpell(spellId, false);
+    }
+    
+    // Deserialize auras
+    uint32 auraCount;
+    data >> auraCount;
+    for (uint32 i = 0; i < auraCount; i++)
+    {
+        uint32 spellId, stacks, duration;
+        data >> spellId >> stacks >> duration;
+        AddAura(spellId, this, nullptr, duration, stacks);
+    }
+    
+    // Deserialize quests
+    uint32 questCount;
+    data >> questCount;
+    for (uint32 i = 0; i < questCount; i++)
+    {
+        uint32 questId, status, rewarded;
+        data >> questId >> status >> rewarded;
+        SetQuestStatus(questId, QuestStatus(status));
+        if (rewarded) SetQuestRewarded(questId);
+    }
+    
+    // Deserialize reputation
+    uint32 repCount;
+    data >> repCount;
+    for (uint32 i = 0; i < repCount; i++)
+    {
+        uint32 factionId, standing, flags;
+        data >> factionId >> standing >> flags;
+        SetReputation(factionId, standing);
+        SetReputationFlags(factionId, flags);
+    }
+    
+    // Deserialize action bars
+    for (uint8 i = 0; i < MAX_ACTION_BAR_INDEX; i++)
+    {
+        uint32 action;
+        data >> action;
+        SetActionButton(i, action);
+    }
+    
+    // Deserialize skills
+    uint32 skillCount;
+    data >> skillCount;
+    for (uint32 i = 0; i < skillCount; i++)
+    {
+        uint32 skillId, value;
+        data >> skillId >> value;
+        SetSkill(skillId, value);
+    }
+    
+    // Deserialize movement
+    uint32 movementFlags;
+    ObjectGuid transportGuid;
+    float transX, transY, transZ, transO;
+    uint32 fallTime;
+    
+    data >> movementFlags;
+    data >> transportGuid;
+    data >> transX >> transY >> transZ >> transO;
+    data >> fallTime;
+    
+    m_movementInfo.SetMovementFlags(movementFlags);
+    m_movementInfo.SetTransportData(transportGuid, transX, transY, transZ, transO);
+    m_movementInfo.SetFallTime(fallTime);
+    
+    // Finalize state
+    SetFallInformation(0, GetPositionZ());
+    UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_ON_LOGIN, 1);
 }
 
 // ================= TIME SYNCHRONIZATION HELPERS ================= //

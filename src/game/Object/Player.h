@@ -2611,6 +2611,10 @@ class Player : public Unit
         {
             m_session = s;
         }
+		
+		// === CLUSTER NODE ACCESSORS ===
+		void SetNodeId(uint32 nodeId) { m_nodeId = nodeId; }
+		uint32 GetNodeId() const { return m_nodeId; }
 
         // Build the create update block for the player
         void BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) const override;
@@ -2859,6 +2863,8 @@ class Player : public Unit
 
         // Get the player's reputation rank for a specific faction
         ReputationRank GetReputationRank(uint32 faction_id) const;
+		
+		void SetReputationFlags(uint32 faction, uint32 flags);
 
         // Reward reputation for killing a unit
         void RewardReputation(Unit* pVictim, float rate);
@@ -3920,28 +3926,6 @@ private:
         uint32 timestamp;
     };
     
-    // Movement history management
-    void AddMovementRecord(const Position& pos);
-    const std::deque<MovementRecord>& GetMovementHistory() const;
-    void ClearMovementHistory() { m_movementHistory.clear(); }
-
-    // Bot detection interface
-    bool IsSuspectedBot() const { return m_botViolations > 0; }
-    void RecordBotViolation();
-
-    // Time synchronization helper
-    uint32 GetAdjustedTime(uint32 clientTime) const;
-
-    // Position override with physics validation
-    virtual void SetPosition(const Position& pos) override;
-    
-    // Movement info setter with anti-cheat hook
-    void SetMovement(const MovementInfo& moveInfo);
-    
-    // Enhanced teleport handling
-    virtual void TeleportTo(uint32 mapid, float x, float y, float z, float orientation, uint32 options = 0) override;
-    
-public:
     // Movement history storage
     std::deque<MovementRecord> m_movementHistory;
     
@@ -3952,6 +3936,37 @@ public:
     // Position correction system
     bool m_shouldCorrectPosition = false;
     Position m_correctedPosition;
+
+    // Cluster node assignment
+    uint32 m_nodeId = 0;
+    
+public:
+    // ================= MOVEMENT SYSTEM =================
+    
+    // Movement history management
+    void AddMovementRecord(const Position& pos);
+    const std::deque<MovementRecord>& GetMovementHistory() const;
+    void ClearMovementHistory() { m_movementHistory.clear(); }
+    
+    // Bot detection interface
+    bool IsSuspectedBot() const { return m_botViolations > 0; }
+    void RecordBotViolation();
+    
+    // Cluster node management
+    void SetNodeId(uint32 nodeId) { m_nodeId = nodeId; }
+    uint32 GetNodeId() const { return m_nodeId; }
+    
+    // Time synchronization helper
+    uint32 GetAdjustedTime(uint32 clientTime) const;
+    
+    // Position override with physics validation
+    virtual void SetPosition(const Position& pos) override;
+    
+    // Movement info setter with anti-cheat hook
+    void SetMovement(const MovementInfo& moveInfo);
+    
+    // Enhanced teleport handling
+    virtual void TeleportTo(uint32 mapid, float x, float y, float z, float orientation, uint32 options = 0) override;
 };
 
 void AddItemsSetItem(Player* player, Item* item);

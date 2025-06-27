@@ -4,6 +4,13 @@
 #include "WorldSession.h"
 #include <unordered_map>
 #include <vector>
+#include <set>
+#include <string>
+#include <mutex>
+
+// Forward declarations
+class WorldNode;
+class ClusterMgr;
 
 class World
 {
@@ -28,10 +35,19 @@ private:
     void UpdatePlayers(uint32_t diff);
     void UpdateMaps(uint32_t diff);
     void UpdateTransports(uint32_t diff);
+    void CheckClusterState();
+    void HandleNodeFailure(const std::string& nodeId);
+    void HandleNodeRecovery(const std::string& nodeId);
+    float CalculateAvgPhysicsError() const;
     
     std::unordered_map<ObjectGuid, WorldSession*> m_sessions; // Session storage
     uint32_t m_lastWorldUpdate = 0;
     bool m_stopEvent = false;
+    
+    // Cluster state tracking
+    std::set<std::string> m_downNodes;          // Track failed nodes
+    uint32_t m_clusterCheckTimer = 0;           // Timer for cluster checks
+    std::mutex m_clusterMutex;                  // Thread safety for cluster operations
     
     // Metrics
     uint32_t m_peakPlayers = 0;

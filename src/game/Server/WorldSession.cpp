@@ -49,6 +49,8 @@
 #include "playerbot.h"
 #include "TimeSync/TimeSyncMgr.h"
 #include "AntiCheat/AntiCheatMgr.h"
+#include "Cluster/Hivemind.h" // Cluster management
+#include "Config/Config.h"     // Configuration
 #endif
 
 // Warden
@@ -433,6 +435,45 @@ void WorldSession::HandleBotPackets()
 }
 #endif
 
+void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
+{
+    ObjectGuid playerGuid = holder->GetGuid();
+    
+    Player* pCurrChar = new Player(this);
+    if (!pCurrChar->LoadFromDB(playerGuid))
+    {
+        delete pCurrChar;
+        KickPlayer("Failed to load player data");
+        return;
+    }
+
+    SetPlayer(pCurrChar);
+
+    pCurrChar->InitAfterLoad();
+
+    Map* map = sMapMgr->CreateMap(pCurrChar->GetMapId(), pCurrChar);
+    if (!map)
+    {
+        delete pCurrChar;
+        KickPlayer("Invalid map");
+        return;
+    }
+
+    map->AddPlayer(pCurrChar);
+
+    if (sConfig.GetBoolDefault("Cluster.Enabled", false))
+    {
+        uint32 nodeId = sHivemind->GetOptimalNodeFor(pCurrChar);
+        pCurrChar->SetNodeId(nodeId);
+        sHivemind->AddPlayer(pCurrChar);
+        sLog.outString("Cluster: Assigned player %s to node %u", 
+                      pCurrChar->GetName(), nodeId);
+    }
+
+    pCurrChar->SendInitialPackets();
+    pCurrChar->FinishLogin();
+}
+
 /// %Log the player out
 void WorldSession::LogoutPlayer(bool Save)
 {
@@ -590,6 +631,13 @@ void WorldSession::LogoutPlayer(bool Save)
 
             guild->BroadcastEvent(GE_SIGNED_OFF, _player->GetObjectGuid(), _player->GetName());
         }
+		
+		/// ================= CLUSTER INTEGRATION ================= //
+		if (sConfig.GetBoolDefault("Cluster.Enabled", false))
+		{
+			sHivemind->RemovePlayer(_player);
+			sLog.outString("Cluster: Removed player %s", _player->GetName());
+		}
 
         ///- Remove pet
         _player->RemovePet(PET_SAVE_AS_CURRENT);
@@ -678,8 +726,19 @@ void WorldSession::LogoutPlayer(bool Save)
 }
 
 /// Kick a player out of the World
-void WorldSession::KickPlayer()
+void WorldSession::KickPlayer(const std::string& reason, bool forMigration)
 {
+    if (forMigration)
+    {
+        // Notify client
+        WorldPacket data(SMSG_TRANSFER_PENDING, 4);
+        data << uint32(0); // MapID (0 for migration)
+        SendPacket(&data);
+        
+        // Short delay to ensure packet delivery
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
     if (m_Socket)
     {
         m_Socket->CloseSocket();
