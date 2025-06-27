@@ -1,11 +1,7 @@
 #include "ClusterMgr.h"
-#include "Log.h"
 #include <cstring>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <algorithm>
 #include <stdexcept>
+#include <system_error>
 
 ClusterMgr* ClusterMgr::instance()
 {
@@ -13,10 +9,28 @@ ClusterMgr* ClusterMgr::instance()
     return &mgr;
 }
 
-ClusterMgr::ClusterMgr() : m_running(false), m_port(0) {}
-ClusterMgr::~ClusterMgr() { Stop(); }
+ClusterMgr::ClusterMgr() : 
+    m_running(false), 
+    m_port(0) 
+{
+    #ifdef _WIN32
+    if (WSAStartup(MAKEWORD(2, 2), &m_wsaData) != 0) {
+        throw std::runtime_error("WSAStartup failed");
+    }
+    #endif
+}
 
-void ClusterMgr::Initialize(const std::string& nodeId, const std::string& bindIp, uint16_t port, 
+ClusterMgr::~ClusterMgr() 
+{ 
+    Stop();
+    #ifdef _WIN32
+    WSACleanup();
+    #endif
+}
+
+void ClusterMgr::Initialize(const std::string& nodeId, 
+                            const std::string& bindIp, 
+                            uint16_t port, 
                             const std::map<std::string, std::pair<std::string, uint16_t>>& peers)
 {
     m_nodeId = nodeId;
@@ -27,6 +41,8 @@ void ClusterMgr::Initialize(const std::string& nodeId, const std::string& bindIp
 
 void ClusterMgr::Start()
 {
+    if (m_running) return;
+    
     m_running = true;
     m_heartbeatThread = std::thread(&ClusterMgr::HeartbeatThread, this);
     m_listenThread = std::thread(&ClusterMgr::ListenThread, this);
@@ -35,6 +51,8 @@ void ClusterMgr::Start()
 
 void ClusterMgr::Stop()
 {
+    if (!m_running) return;
+    
     m_running = false;
     if (m_heartbeatThread.joinable()) m_heartbeatThread.join();
     if (m_listenThread.joinable()) m_listenThread.join();
@@ -48,56 +66,6 @@ void ClusterMgr::HeartbeatThread()
         SendHeartbeats();
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
-}
-
-void ClusterMgr::ListenThread()
-{
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0)
-    {
-        sLog.outError("Cluster: Failed to create UDP socket");
-        return;
-    }
-
-    sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(m_port);
-    addr.sin_addr.s_addr = inet_addr(m_bindIp.c_str());
-    
-    if (bind(sockfd, (sockaddr*)&addr, sizeof(addr)) < 0)
-    {
-        sLog.outError("Cluster: Failed to bind UDP socket to %s:%d", m_bindIp.c_str(), m_port);
-        close(sockfd);
-        return;
-    }
-
-    char buffer[1024];
-    while (m_running)
-    {
-        sockaddr_in sender;
-        socklen_t senderLen = sizeof(sender);
-        int len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr*)&sender, &senderLen);
-        
-        if (len > 0)
-        {
-            try
-            {
-                ClusterMessage msg = ClusterMessage::Deserialize(
-                    reinterpret_cast<const uint8_t*>(buffer), len);
-                HandleIncomingMessage(msg);
-            }
-            catch (const std::exception& e)
-            {
-                sLog.outError("Cluster: Failed to deserialize message: %s", e.what());
-            }
-        }
-        else if (len < 0)
-        {
-            sLog.outError("Cluster: Socket recv error: %s", strerror(errno));
-        }
-    }
-    close(sockfd);
 }
 
 void ClusterMgr::SendHeartbeats()
@@ -115,25 +83,124 @@ void ClusterMgr::SendHeartbeats()
     }
 }
 
-// Method for sending raw data
-void ClusterMgr::SendToAddress(const std::string& ip, uint16_t port, const void* data, size_t size) {
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        sLog.outError("Cluster: Failed to create socket for %s:%d", ip.c_str(), port);
+void ClusterMgr::CloseSocket(int sockfd)
+{
+    #ifdef _WIN32
+    closesocket(sockfd);
+    #else
+    close(sockfd);
+    #endif
+}
+
+void ClusterMgr::ListenThread()
+{
+    int sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sockfd == -1) 
+    {
+        sLog.outError("Cluster: Failed to create socket: %s", strerror(errno));
         return;
     }
     
+    // Set non-blocking
+    #ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(sockfd, FIONBIO, &mode);
+    #else
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+    #endif
+
+    sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(m_port);
+    
+    if (inet_pton(AF_INET, m_bindIp.c_str(), &addr.sin_addr) != 1) 
+    {
+        sLog.outError("Cluster: Invalid bind IP: %s", m_bindIp.c_str());
+        CloseSocket(sockfd);
+        return;
+    }
+    
+    if (bind(sockfd, (sockaddr*)&addr, sizeof(addr)) == -1) 
+    {
+        sLog.outError("Cluster: Bind failed: %s:%d - %s", 
+                     m_bindIp.c_str(), m_port, strerror(errno));
+        CloseSocket(sockfd);
+        return;
+    }
+
+    char buffer[1024];
+    while (m_running)
+    {
+        sockaddr_in sender;
+        socklen_t senderLen = sizeof(sender);
+        int len = recvfrom(sockfd, buffer, sizeof(buffer), 0, 
+                          (sockaddr*)&sender, &senderLen);
+        
+        if (len > 0)
+        {
+            try
+            {
+                ClusterMessage msg = ClusterMessage::Deserialize(
+                    reinterpret_cast<const uint8_t*>(buffer), len);
+                HandleIncomingMessage(msg);
+            }
+            catch (const std::exception& e)
+            {
+                sLog.outError("Cluster: Deserialization error: %s", e.what());
+            }
+        }
+        else 
+        {
+            // Handle non-blocking errors
+            #ifdef _WIN32
+            int error = WSAGetLastError();
+            if (error != WSAEWOULDBLOCK) {
+                sLog.outError("Cluster: Recv error: %d", error);
+            }
+            #else
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                sLog.outError("Cluster: Recv error: %s", strerror(errno));
+            }
+            #endif
+            
+            // Sleep to prevent CPU spin
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    CloseSocket(sockfd);
+}
+
+void ClusterMgr::SendToAddress(const std::string& ip, uint16_t port, 
+                               const void* data, size_t size) 
+{
+    int sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sockfd == -1) 
+    {
+        sLog.outError("Cluster: Socket creation failed: %s", strerror(errno));
+        return;
+    }
+
     sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = inet_addr(ip.c_str());
     
-    if (sendto(sockfd, data, size, 0, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        sLog.outError("Cluster: Failed to send data to %s:%d: %s", 
+    if (inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) != 1) 
+    {
+        sLog.outError("Cluster: Invalid target IP: %s", ip.c_str());
+        CloseSocket(sockfd);
+        return;
+    }
+
+    if (sendto(sockfd, (const char*)data, size, 0, 
+              (sockaddr*)&addr, sizeof(addr)) == -1) 
+    {
+        sLog.outError("Cluster: Send failed to %s:%d: %s", 
                      ip.c_str(), port, strerror(errno));
     }
-    close(sockfd);
+    CloseSocket(sockfd);
 }
 
 void ClusterMgr::SendToNode(const std::string& nodeId, const ClusterMessage& msg)

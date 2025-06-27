@@ -23,6 +23,7 @@
  */
 
 #include "Player.h"
+#include "PlayerMigration.h"
 #include "Language.h"
 #include "Database/DatabaseEnv.h"
 #include "Log.h"
@@ -96,6 +97,9 @@
 #define SKILL_TEMP_BONUS(x)    int16(PAIR32_LOPART(x))
 #define SKILL_PERM_BONUS(x)    int16(PAIR32_HIPART(x))
 #define MAKE_SKILL_BONUS(t, p) MAKE_PAIR32(t,p)
+
+// Define cluster migration visual effects
+#define SPELL_VISUAL_MIGRATION_START 243  // Default teleport effect
 
 enum CharacterFlags
 {
@@ -720,6 +724,473 @@ void Player::CleanupsBeforeDelete()
 
     // Perform unit-specific cleanup
     Unit::CleanupsBeforeDelete();
+}
+
+// === CLUSTER MIGRATION ===
+void Player::MigrateToNode(uint32_t newNodeId)
+{
+    // Validate target node
+    if (!sClusterMgr->IsNodeValid(newNodeId)) {
+        sLog.outError("MIGRATION ERROR: Invalid target node %u for %s", newNodeId, GetName());
+        return;
+    }
+
+    if (!CanMigrate()) {
+        DelayMigration(3000, newNodeId);
+        return;
+    }
+	
+	// State validation before migration
+    if (IsInCombat()) {
+        sLog.outWarning("MIGRATION WARNING: %s (GUID: %u) started migration while in combat!",
+                       GetName(), GetGUIDLow());
+    }
+    if (IsFalling()) {
+        sLog.outWarning("MIGRATION WARNING: %s (GUID: %u) started migration while falling!",
+                       GetName(), GetGUIDLow());
+    }
+
+    // Pre-migration safeguards
+    BufferCriticalActions();
+    m_preMigrationPos.Relocate(this);
+    
+    // Set invulnerable state
+    SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE);
+    
+    // Visual indicator (if enabled)
+    if (sConfig.GetBoolDefault("Cluster.Migration.VisualEnable", true)) {
+        uint32 visualId = sConfig.GetIntDefault("Cluster.Migration.VisualID", 243);
+        SendPlaySpellVisual(visualId);
+    }
+    
+    try {
+        // Populate migration data
+        PlayerMigrationData migrationData;
+        migrationData.guid = GetGUID();
+        migrationData.name = GetName();
+        migrationData.accountId = GetSession()->GetAccountId();
+        migrationData.positionX = GetPositionX();
+        migrationData.positionY = GetPositionY();
+        migrationData.positionZ = GetPositionZ();
+        migrationData.orientation = GetOrientation();
+        migrationData.mapId = GetMapId();
+        migrationData.zoneId = GetZoneId();
+        migrationData.areaId = GetAreaId();
+        migrationData.health = GetHealth();
+        migrationData.mana = GetPower(POWER_MANA);
+        migrationData.level = GetLevel();
+        migrationData.race = GetRace();
+        migrationData.class_ = GetClass();
+        migrationData.gender = GetGender();
+        migrationData.xp = GetXP();
+        migrationData.money = GetMoney();
+        migrationData.totalHonor = GetTotalHonorPoints();
+        migrationData.arenaPoints = GetArenaPoints();
+        migrationData.totalKills = GetTotalKills();
+        migrationData.maxHealth = GetMaxHealth();
+        migrationData.maxMana = GetMaxPower(POWER_MANA);
+        migrationData.equipmentSetId = GetEquipmentSetId();
+        
+        // Equipment
+        for (uint8 i = 0; i < EQUIPMENT_SLOT_END; ++i) {
+            if (Item* item = GetItemByPos(INVENTORY_SLOT_BAG_0, i)) {
+                migrationData.equipment[i].exists = true;
+                migrationData.equipment[i].entry = item->GetEntry();
+                migrationData.equipment[i].count = item->GetCount();
+                migrationData.equipment[i].enchantId = item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT);
+            }
+        }
+        
+        // Spells
+        for (uint32 i = 0; i < sSpellMgr.GetMaxSpellId(); ++i) {
+            if (HasSpell(i)) {
+                migrationData.spells.push_back(i);
+            }
+        }
+        
+        // Auras
+        Unit::AuraMap const& auraMap = GetAuras();
+        for (const auto& auraPair : auraMap) {
+            if (auraPair.second->GetCasterGuid() == GetObjectGuid()) {
+                migrationData.auras.push_back({
+                    auraPair.second->GetId(),
+                    auraPair.second->GetStackAmount(),
+                    auraPair.second->GetDuration()
+                });
+            }
+        }
+        
+        // Serialize to buffer
+        ByteBuffer buffer;
+        migrationData.Serialize(buffer);
+        
+        // Prepare and send migration packet
+        WorldPacket data(SMSG_CLUSTER_MIGRATE_PREPARE);
+        data << uint32(newNodeId);
+        data.append(buffer);
+        GetSession()->SendPacket(&data);
+        
+        m_migrationInProgress = true;
+        
+        if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+            sLog.outDebug("Starting migration for %s to node %u", GetName(), newNodeId);
+        }
+        
+        // Disconnect player to complete migration
+        GetSession()->KickPlayer("Cluster migration", true);
+    }
+    catch (const std::exception& e) {
+        sLog.outError("MIGRATION ERROR: Failed to serialize data for %s: %s", GetName(), e.what());
+        CancelMigration();
+    }
+    catch (...) {
+        sLog.outError("MIGRATION ERROR: Failed to serialize data for %s: Unknown exception", GetName());
+        CancelMigration();
+    }
+}
+
+void Player::DelayMigration(uint32 delay, uint32 nodeId)
+{
+    // Validate delay parameters
+    if (delay > 30000) {
+        sLog.outWarning("MIGRATION WARNING: Excessive delay (%ums) for %s", delay, GetName());
+        delay = 3000; // Cap at 30 seconds
+    }
+
+    m_migrationDelayTimer = delay;
+    m_migrationTargetNode = nodeId;
+    m_migrationPending = true;
+    
+    // Get reason for delay
+    std::string reason = "Unknown";
+    if (IsInCombat()) reason = "combat";
+    else if (IsFalling()) reason = "falling";
+    else if (IsDuringTeleport()) reason = "teleport";
+    
+    if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+        sLog.outDebug("Delaying migration for %s: %s (retry in %ums)", 
+                     GetName(), reason.c_str(), delay);
+    }
+}
+
+void Player::CompleteMigration()
+{
+    // State validation
+    if (IsInCombat()) {
+        sLog.outWarning("MIGRATION WARNING: %s completing migration in combat!", GetName());
+    }
+    if (IsFalling()) {
+        sLog.outWarning("MIGRATION WARNING: %s completing migration while falling!", GetName());
+    }
+
+    // Remove invulnerability
+    RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE);
+    
+    // Restore control
+    SetClientControl(this, true);
+    
+    // Handle potential death during migration
+    HandleMigrationDeathCheck();
+    
+    // Update cluster registry
+    if (!sClusterMgr->RegisterPlayerOnNode(GetGUID(), m_migrationTargetNode)) {
+        sLog.outError("MIGRATION ERROR: Failed to register %s on node %u", 
+                     GetName(), m_migrationTargetNode);
+    }
+    sSocialMgr->OnPlayerMigrate(GetGUID(), m_migrationTargetNode);
+    
+    // Debug log
+    if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+        sLog.outDebug("Completed migration for %s to node %u", 
+                     GetName(), m_migrationTargetNode);
+    }
+    
+    // Reset state
+    m_migrationPending = false;
+    m_migrationInProgress = false;
+    
+    // Disconnect player from source node
+    GetSession()->LogoutPlayer();
+}
+
+	// Cancel Migration helper function
+void Player::CancelMigration()
+{
+    // Only perform actions if migration was active
+    if (!m_migrationPending && !m_migrationInProgress) {
+        return;
+    }
+
+    // State validation
+    bool wasFrozen = HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE);
+    bool wasInProgress = m_migrationInProgress;
+
+    // Restore critical states
+    RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE);
+    SetClientControl(this, true);
+    
+    // Restore buffered actions if migration was in progress
+    if (wasInProgress) {
+        RestoreActions();
+    }
+    
+    // Reset state
+    m_migrationPending = false;
+    m_migrationInProgress = false;
+    
+    // Logging and diagnostics
+    if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+        std::string reason = "Unknown reason";
+        
+        // Detect common cancellation causes
+        if (IsInCombat()) reason = "combat state";
+        else if (IsFalling()) reason = "falling state";
+        else if (IsDead()) reason = "death state";
+        
+        sLog.outDebug("Migration cancelled for %s (GUID: %u). Reason: %s. State: %s", 
+                     GetName(), GetGUIDLow(), reason.c_str(),
+                     wasInProgress ? "in-progress" : "pending");
+    }
+    
+    // Security checks
+    if (wasFrozen && !wasInProgress) {
+        sLog.outWarning("MIGRATION WARNING: %s (GUID: %u) was frozen but migration not started!",
+                       GetName(), GetGUIDLow());
+    }
+    
+    // Anti-exploit: Ensure control is restored
+    if (!HasClientControl()) {
+        sLog.outError("MIGRATION ERROR: Control not restored for %s after cancellation!",
+                     GetName());
+        SetClientControl(this, true); // Force restore
+    }
+}
+
+bool Player::CanMigrate() const
+{
+    bool canMigrate = true;
+    std::string reason;
+    uint32_t debugLogLevel = sConfig.GetIntDefault("Cluster.Migration.LogLevel", 0);
+
+    // --- CORE BLOCKERS (All versions) ---
+    if (IsInCombat()) {
+        canMigrate = false;
+        reason = "Player is in combat";
+    }
+    else if (IsFalling()) {
+        canMigrate = false;
+        reason = "Player is falling";
+    }
+    else if (IsDuringTeleport()) {
+        canMigrate = false;
+        reason = "Player is teleporting";
+    }
+    else if (m_migrationInProgress) {
+        canMigrate = false;
+        reason = "Migration already in progress";
+    }
+    else if (IsDead()) {
+        canMigrate = false;
+        reason = "Player is dead";
+    }
+
+    // --- VANILLA 1.12.1 SPECIFIC CHECKS ---
+    if (canMigrate) {
+        if (IsMounted() && IsFlying()) {
+            canMigrate = false;
+            reason = "Player is flying on mount";
+        }
+        else if (HasUnitState(UNIT_STAT_STUNNED) || HasUnitState(UNIT_STAT_ROOT)) {
+            canMigrate = false;
+            reason = "Player is stunned or rooted";
+        }
+        else if (IsInWater()) {
+            canMigrate = false;
+            reason = "Player is swimming";
+        }
+        else if (IsPolymorphed()) {
+            canMigrate = false;
+            reason = "Player is polymorphed";
+        }
+        else if (IsOnTransport()) {
+            canMigrate = false;
+            reason = "Player is on a transport";
+        }
+        else if (IsInDuel()) {
+            canMigrate = false;
+            reason = "Player is in a duel";
+        }
+        else if (IsFeigningDeath()) {
+            canMigrate = false;
+            reason = "Player is feigning death";
+        }
+        else if (HasAuraType(SPELL_AURA_MOD_STEALTH)) {
+            canMigrate = false;
+            reason = "Player is stealthed";
+        }
+        else if (IsInFlight()) {
+            canMigrate = false;
+            reason = "Player is on flight path";
+        }
+
+        // --- TBC+ EXPANSION CHECKS ---
+        /*
+        // Uncomment for TBC+
+        // if (IsInArena()) {
+        //     canMigrate = false;
+        //     reason = "Player is in arena combat";
+        // }
+        // else if (IsLockedIntoVehicle()) {
+        //     canMigrate = false;
+        //     reason = "Player is in a vehicle";
+        // }
+        */
+
+        // --- WOTLK+ EXPANSION CHECKS ---
+        /*
+        // Uncomment for WotLK+
+        // if (GetSession()->IsBot()) {
+        //     canMigrate = false;
+        //     reason = "Bot accounts cannot migrate";
+        // }
+        // else if (HasAuraType(SPELL_AURA_MOD_CONFUSE)) {
+        //     canMigrate = false;
+        //     reason = "Player is confused";
+        // }
+        */
+    }
+
+    // --- LOGGING (All versions) ---
+    if (!canMigrate) {
+        if (debugLogLevel >= 1) {
+            sLog.outWarning("MIGRATION WARNING: Blocked for %s (GUID: %u): %s", 
+                           GetName(), GetGUIDLow(), reason.c_str());
+        }
+        if (debugLogLevel >= 2) {
+            sLog.outError("MIGRATION ERROR: %s - Player: %s (Acct: %u, IP: %s)", 
+                         reason.c_str(), GetName(), 
+                         GetSession()->GetAccountId(),
+                         GetSession()->GetRemoteAddress().c_str());
+        }
+    }
+
+    return canMigrate;
+}
+
+void Player::HandleMigrationDeathCheck()
+{
+    if (!IsDead())
+        return;
+
+    // Log invalid states that shouldn't occur during death recovery
+    if (IsInCombat()) {
+        sLog.outWarning("MIGRATION DEATH RECOVERY: Player %s (GUID: %u) is dead but still in combat!",
+                       GetName(), GetGUIDLow());
+    }
+    if (IsFalling()) {
+        sLog.outWarning("MIGRATION DEATH RECOVERY: Player %s (GUID: %u) is dead while falling!",
+                       GetName(), GetGUIDLow());
+    }
+    if (IsDuringTeleport()) {
+        sLog.outWarning("MIGRATION DEATH RECOVERY: Player %s (GUID: %u) is dead during teleport!",
+                       GetName(), GetGUIDLow());
+    }
+
+    // Position safety check
+    if (!m_preMigrationPos.IsPositionValid()) {
+        sLog.outError("MIGRATION DEATH RECOVERY: Invalid position for %s (GUID: %u) - using current position",
+                     GetName(), GetGUIDLow());
+        m_preMigrationPos.Relocate(this);
+    }
+
+    // Resurrect at pre-migration position
+    NearTeleportTo(m_preMigrationPos);
+    ResurrectPlayer(50.0f); // 50% health
+
+    // Anti-exploit: Clear combat state if still present
+    if (IsInCombat()) {
+        sLog.outWarning("MIGRATION DEATH RECOVERY: Clearing combat state for %s (GUID: %u)",
+                       GetName(), GetGUIDLow());
+        ClearInCombat();
+    }
+
+    if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+        sLog.outDebug("Migration death recovery for %s at position (%.1f, %.1f, %.1f)",
+                     GetName(), m_preMigrationPos.x, m_preMigrationPos.y, m_preMigrationPos.z);
+    }
+}
+
+void Player::BufferCriticalActions()
+{
+    // Capture spellcasting state with validation
+    if (IsNonMeleeSpellCasted(false)) {
+        m_migrationData.pendingSpell = GetCurrentSpell(CURRENT_GENERIC_SPELL);
+        
+        if (!m_migrationData.pendingSpell) {
+            sLog.outError("BUFFER CRITICAL ACTIONS: Player %s (GUID: %u) has casting flag but no active spell!",
+                         GetName(), GetGUIDLow());
+        } else {
+            InterruptSpell(CURRENT_GENERIC_SPELL);
+            if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+                sLog.outDebug("Buffered spell %u for player %s",
+                             m_migrationData.pendingSpell->m_spellInfo->Id, GetName());
+            }
+        }
+    } else if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+        sLog.outDebug("No spellcasting to buffer for player %s", GetName());
+    }
+    
+    // Capture movement with validation
+    m_migrationData.moveGen = GetMotionMaster()->GetCurrentMovementGeneratorType();
+    
+    if (m_migrationData.moveGen == IDLE_MOTION_TYPE) {
+        sLog.outWarning("BUFFER CRITICAL ACTIONS: Player %s (GUID: %u) has no active movement generator",
+                       GetName(), GetGUIDLow());
+    } else if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+        sLog.outDebug("Buffered movement %u for player %s",
+                     static_cast<uint32>(m_migrationData.moveGen), GetName());
+    }
+    
+    GetMotionMaster()->Clear();
+}
+
+void Player::RestoreActions()
+{
+    // Spell restoration with validation
+    if (m_migrationData.pendingSpell) {
+        if (m_migrationData.pendingSpell->m_spellInfo) {
+            try {
+                CastSpell(this, m_migrationData.pendingSpell->m_spellInfo->Id, TRIGGERED_CAST_DIRECTLY);
+                if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+                    sLog.outDebug("Restored spell %u for player %s",
+                                 m_migrationData.pendingSpell->m_spellInfo->Id, GetName());
+                }
+            } catch (const std::exception& e) {
+                sLog.outError("RESTORE ACTIONS: Failed to cast spell %u for player %s: %s",
+                             m_migrationData.pendingSpell->m_spellInfo->Id, GetName(), e.what());
+            }
+        } else {
+            sLog.outError("RESTORE ACTIONS: Invalid spell info for player %s", GetName());
+        }
+    } else if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+        sLog.outDebug("No spell to restore for player %s", GetName());
+    }
+    
+    // Movement restoration with validation
+    try {
+        if (m_migrationData.moveGen != IDLE_MOTION_TYPE) {
+            GetMotionMaster()->Move(m_migrationData.moveGen);
+            if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+                sLog.outDebug("Restored movement %u for player %s",
+                             static_cast<uint32>(m_migrationData.moveGen), GetName());
+            }
+        }
+    } catch (const std::exception& e) {
+        sLog.outError("RESTORE ACTIONS: Failed to restore movement for player %s: %s",
+                     GetName(), e.what());
+        // Fallback to idle movement
+        GetMotionMaster()->MoveIdle();
+    }
 }
 
 bool Player::Create(uint32 guidlow, const std::string& name, uint8 race, uint8 class_, uint8 gender, uint8 skin, uint8 face, uint8 hairStyle, uint8 hairColor, uint8 facialHair, uint8 /*outfitId */)
@@ -1373,6 +1844,28 @@ void Player::Update(uint32 update_diff, uint32 p_time)
     SetCanDelayTeleport(true);
     Unit::Update(update_diff, p_time);
     SetCanDelayTeleport(false);
+	
+	// Handle migration delay
+    if (m_migrationPending)
+    {
+        if (m_migrationDelayTimer <= diff)
+        {
+            if (CanMigrate())
+                MigrateToNode(m_migrationTargetNode);
+            else
+                m_migrationDelayTimer = 3000; // Recheck after 3s
+        }
+        else
+        {
+            m_migrationDelayTimer -= diff;
+        }
+    }
+    
+    // Finalize migration when ready
+    if (m_migrationInProgress && !IsBeingTeleported())
+    {
+        CompleteMigration();
+    }    
 
     // Update player-only attacks
     if (uint32 ranged_att = getAttackTimer(RANGED_ATTACK))
@@ -1396,6 +1889,22 @@ void Player::Update(uint32 update_diff, uint32 p_time)
 	
 	// Update player-specific drift
 	sTimeSyncMgr->UpdateForPlayer(this);
+	
+    // Migration state handling
+    if (m_migrationPending) {
+        if (m_migrationDelayTimer <= diff) {
+            if (CanMigrate())
+                MigrateToNode(m_migrationTargetNode);
+            else
+                m_migrationDelayTimer = 3000;
+        } else {
+            m_migrationDelayTimer -= diff;
+        }
+    }
+    
+    if (m_migrationInProgress && !IsBeingTeleported()) {
+        CompleteMigration();
+    }
 
     // Update items that have just a limited lifetime
     if (now > m_Last_tick)
@@ -1798,134 +2307,118 @@ void Player::HandleTeleport(uint32 mapid, float x, float y, float z, float orien
 // ================= CLUSTER MIGRATION ================= //
 void Player::MigrateToNode(uint32_t newNodeId)
 {
-    // Serialize critical player state
-    WorldPacket data(SMSG_PLAYER_MIGRATION, 4096); // Use sufficient size
+    // Validate target node
+    if (!sClusterMgr->IsNodeValid(newNodeId)) {
+        sLog.outError("MIGRATION ERROR: Invalid target node %u for %s", newNodeId, GetName());
+        return;
+    }
+
+    if (!CanMigrate()) {
+        DelayMigration(3000, newNodeId);
+        return;
+    }
+
+    // Pre-migration safeguards
+    BufferCriticalActions();
+    m_preMigrationPos.Relocate(this);
     
-    // Core identity and position
-    data << GetGUID();
-    data << GetName();
-    data << GetPositionX() << GetPositionY() << GetPositionZ();
-    data << GetOrientation();
-    data << GetMapId();
-    data << GetZoneId();
-    data << GetAreaId();
+    // Set invulnerable state
+    SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE);
     
-    // Vital stats
-    data << GetHealth();
-    data << GetPower(POWER_MANA);
-    data << GetLevel();
-    data << GetRace();
-    data << GetClass();
-    data << GetGender();
-    data << GetXP();
-    data << GetMoney();
+    // Visual indicator (if enabled)
+    if (sConfig.GetBoolDefault("Cluster.Migration.VisualEnable", true)) {
+        uint32 visualId = sConfig.GetIntDefault("Cluster.Migration.VisualID", 243);
+        SendPlaySpellVisual(visualId);
+    }
     
-    // Honor and PvP
-    data << GetTotalHonorPoints();
-    data << GetArenaPoints();
-    data << GetTotalKills();
-    
-    // Max stats
-    data << GetMaxHealth();
-    data << GetMaxPower(POWER_MANA);
-    
-    // Equipment and inventory
-    data << GetEquipmentSetId();
-    for (uint8 i = 0; i < EQUIPMENT_SLOT_END; i++)
-    {
-        if (Item* item = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
-        {
-            data << uint8(1); // Item exists marker
-            data << item->GetEntry();
-            data << item->GetCount();
-            data << item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT);
-            // Add more item fields as needed
+    try {
+        // Populate migration data
+        PlayerMigrationData migrationData;
+        migrationData.guid = GetGUID();
+        migrationData.name = GetName();
+        migrationData.accountId = GetSession()->GetAccountId();
+        migrationData.positionX = GetPositionX();
+        migrationData.positionY = GetPositionY();
+        migrationData.positionZ = GetPositionZ();
+        migrationData.orientation = GetOrientation();
+        migrationData.mapId = GetMapId();
+        migrationData.zoneId = GetZoneId();
+        migrationData.areaId = GetAreaId();
+        migrationData.health = GetHealth();
+        migrationData.mana = GetPower(POWER_MANA);
+        migrationData.level = GetLevel();
+        migrationData.race = GetRace();
+        migrationData.class_ = GetClass();
+        migrationData.gender = GetGender();
+        migrationData.xp = GetXP();
+        migrationData.money = GetMoney();
+        migrationData.totalHonor = GetTotalHonorPoints();
+        migrationData.arenaPoints = GetArenaPoints();
+        migrationData.totalKills = GetTotalKills();
+        migrationData.maxHealth = GetMaxHealth();
+        migrationData.maxMana = GetMaxPower(POWER_MANA);
+        migrationData.equipmentSetId = GetEquipmentSetId();
+        
+        // Equipment
+        for (uint8 i = 0; i < EQUIPMENT_SLOT_END; ++i) {
+            if (Item* item = GetItemByPos(INVENTORY_SLOT_BAG_0, i)) {
+                migrationData.equipment[i].exists = true;
+                migrationData.equipment[i].entry = item->GetEntry();
+                migrationData.equipment[i].count = item->GetCount();
+                migrationData.equipment[i].enchantId = item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT);
+            }
         }
-        else
-        {
-            data << uint8(0); // Empty slot marker
+        
+        // Spells
+        for (uint32 i = 0; i < sSpellMgr.GetMaxSpellId(); ++i) {
+            if (HasSpell(i)) {
+                migrationData.spells.push_back(i);
+            }
         }
-    }
-    
-    // Spells and talents
-    data << uint32(GetSpellMap().size());
-    for (auto& spell : GetSpellMap())
-        data << spell.first; // Spell ID
-    
-    // Auras
-    data << uint32(GetAuras().size());
-    for (Aura const* aura : GetAuras())
-    {
-        data << aura->GetId();
-        data << aura->GetStackAmount();
-        data << aura->GetDuration();
-    }
-    
-    // Quests
-    data << uint32(GetQuestStatusMap().size());
-    for (auto& quest : GetQuestStatusMap())
-    {
-        data << quest.first; // Quest ID
-        data << quest.second.m_status;
-        data << quest.second.m_rewarded;
-    }
-    
-    // Reputation
-    data << uint32(GetReputation().size());
-    for (auto& rep : GetReputation())
-    {
-        data << rep.first; // Faction ID
-        data << rep.second.standing;
-        data << rep.second.flags;
-    }
-    
-    // Action bars
-    for (uint8 i = 0; i < MAX_ACTION_BAR_INDEX; i++)
-    {
-        data << GetActionButton(i);
-    }
-    
-    // Skills
-    data << uint32(GetSkillMap().size());
-    for (auto& skill : GetSkillMap())
-    {
-        data << skill.first; // Skill ID
-        data << skill.second;
-    }
-    
-    // Movement info
-    data << m_movementInfo.GetMovementFlags();
-    data << m_movementInfo.GetTransportGuid();
-    data << m_movementInfo.GetTransportPos()->x;
-    data << m_movementInfo.GetTransportPos()->y;
-    data << m_movementInfo.GetTransportPos()->z;
-    data << m_movementInfo.GetTransportPos()->o;
-    data << m_movementInfo.GetFallTime();
-    
-    // Add more fields as needed
+        
+        // Auras
+        Unit::AuraMap const& auraMap = GetAuras();
+        for (const auto& auraPair : auraMap) {
+            if (auraPair.second->GetCasterGuid() == GetObjectGuid()) {
+                migrationData.auras.push_back({
+                    auraPair.second->GetId(),
+                    auraPair.second->GetStackAmount(),
+                    auraPair.second->GetDuration()
+                });
+            }
+        }
+        
+        // Serialize to buffer
+        ByteBuffer buffer;
+        migrationData.Serialize(buffer);
+        
+        // Prepare cluster message
+        ClusterMessage msg;
+        msg.type = CMSG_CLUSTER_PLAYER_MIGRATE;
+        msg.sourceNode = sClusterMgr->GetNodeId();
+        msg.targetNode = std::to_string(newNodeId);
+        msg.payload.assign(buffer.contents(), buffer.contents() + buffer.size());
 
-    // Prepare cluster message
-    /*ClusterMessage msg;
-    msg.type = CLUSTER_MSG_PLAYER_MIGRATION;
-    msg.sourceNode = sClusterMgr->GetNodeId();
-    msg.targetNode = std::to_string(newNodeId);
-    msg.payload.assign(data.contents(), data.contents() + data.size());
-
-    sClusterMgr->SendToNode(std::to_string(newNodeId), msg);
-    GetSession()->KickPlayer("Cluster migration", true);*/
-	
-	// Prepare cluster message
-    WorldPacket data(SMSG_CLUSTER_PLAYER_DATA, buffer.size());
-    data.append(buffer);
-
-    ClusterMessage msg;
-    msg.type = CMSG_CLUSTER_PLAYER_MIGRATE;
-    msg.sourceNode = sClusterMgr->GetNodeId();
-    msg.targetNode = std::to_string(newNodeId);
-    msg.payload.assign(data.contents(), data.contents() + data.size());
-
-    sClusterMgr->SendToNode(std::to_string(newNodeId), msg);
-    GetSession()->KickPlayer("Cluster migration", true);
+        // Send to destination node
+        sClusterMgr->SendToNode(std::to_string(newNodeId), msg);
+        
+        m_migrationInProgress = true;
+        
+        if (sConfig.GetBoolDefault("Cluster.Migration.DebugLog", false)) {
+            sLog.outDebug("Starting migration for %s to node %u", GetName(), newNodeId);
+        }
+        
+        // Disconnect player to complete migration
+        GetSession()->KickPlayer("Cluster migration", true);
+    }
+    catch (const std::exception& e) {
+        sLog.outError("MIGRATION ERROR: Failed to serialize data for %s: %s", GetName(), e.what());
+        CancelMigration();
+    }
+    catch (...) {
+        sLog.outError("MIGRATION ERROR: Failed to serialize data for %s: Unknown exception", GetName());
+        CancelMigration();
+    }
 }
 
 void Player::LoadFromMigrationData(WorldPacket& data)
@@ -2059,6 +2552,45 @@ void Player::LoadFromMigrationData(WorldPacket& data)
     m_movementInfo.SetMovementFlags(movementFlags);
     m_movementInfo.SetTransportData(transportGuid, transX, transY, transZ, transO);
     m_movementInfo.SetFallTime(fallTime);
+	
+	// Quests
+    for (auto& quest : data.quests) {
+        mQuestStatus[quest.questId].m_status = QuestStatus(quest.status);
+        mQuestStatus[quest.questId].m_rewarded = quest.rewarded;
+        
+        for (auto& counter : quest.mobCounters) {
+            mQuestStatus[quest.questId].m_creatureOrGOcount[counter.first] = counter.second;
+        }
+    }
+    
+    // Reputation
+    for (auto& rep : data.reputations) {
+        m_reputationMgr.SetReputation(rep.factionId, rep.standing);
+        m_reputationMgr.SetFactionFlags(rep.factionId, rep.flags);
+    }
+    
+    // Action bars
+    for (uint8 i = 0; i < MAX_ACTION_BAR_INDEX; i++) {
+        SetActionButton(i, data.actionBars[i]);
+    }
+    
+    // Skills
+    for (auto& skill : data.skills) {
+        SetSkill(skill.first, 1, skill.second, skill.second);
+    }
+    
+    // Movement info
+    m_movementInfo.SetMovementFlags(data.movementFlags);
+    if (data.movementFlags & MOVEFLAG_ONTRANSPORT) {
+        m_movementInfo.SetTransportData(
+            data.transportGuid,
+            data.transportPosX,
+            data.transportPosY,
+            data.transportPosZ,
+            data.transportPosO
+        );
+    }
+    m_movementInfo.SetFallTime(data.fallTime);
     
     // Finalize state
     SetFallInformation(0, GetPositionZ());

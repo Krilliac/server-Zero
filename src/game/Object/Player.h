@@ -1033,6 +1033,11 @@ class Player : public Unit
 
         void AddToWorld() override; // Add the player to the world
         void RemoveFromWorld() override; // Remove the player from the world
+		
+		// === CLUSTER MIGRATION ===
+		void MigrateToNode(uint32 nodeId);
+		bool CanMigrate() const;
+		void HandleMigrationDeathCheck();
 
         bool TeleportTo(uint32 mapid, float x, float y, float z, float orientation, uint32 options = 0, bool allowNoDelay = false);
 
@@ -3831,6 +3836,18 @@ class Player : public Unit
 
         // Set the ability to delay teleport
         void SetCanDelayTeleport(bool setting) { m_bCanDelayTeleport = setting; }
+		
+		void CompleteMigration();
+
+		uint32 m_migrationTargetNode = 0;
+		
+		uint32 m_migrationDelayTimer = 0;
+		
+		bool m_migrationPending = false;
+		
+		bool m_migrationInProgress = false;
+		
+		Position m_preMigrationPos;
 
         // Check if the player has a delayed teleport
         bool IsHasDelayedTeleport() const
