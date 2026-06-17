@@ -1,0 +1,127 @@
+/*
+ * Anti-Cheat / Movement-Validation framework — central manager.
+ * Slice 1 (core detection pipeline).
+ *
+ * The manager is the single ingress for all detected violations and the ONLY
+ * place countermeasures (rubberband / kick) are applied. Detectors never punish
+ * directly: they call RecordViolation() and the manager decides.
+ *
+ * NOTE (Slice 1 deviation from the spec): per-player score is held here in a
+ * guid-keyed map rather than on the Player object. This keeps the manager
+ * self-contained and independently testable for the first slice. Moving the
+ * score onto the per-player validator (to drop the map mutex on the hot path)
+ * is a planned follow-up in the cache/optimization slice.
+ */
+
+#ifndef MANGOS_ANTICHEATMGR_H
+#define MANGOS_ANTICHEATMGR_H
+
+#include "Common.h"
+#include "AntiCheatDefines.h"
+
+#include <map>
+#include <string>
+#include <mutex>
+
+class Player;
+
+// Snapshot of where/what when a violation fired. Cheap to build; passed by const ref.
+struct AntiCheatContext
+{
+    uint32 mapId;
+    float  x, y, z;
+    float  speed;       // observed horizontal speed (yd/s), 0 if N/A
+    uint32 latency;     // session EWMA latency in ms at time of event
+    const char* detail; // short static description, never user input
+
+    AntiCheatContext()
+        : mapId(0), x(0.f), y(0.f), z(0.f), speed(0.f), latency(0), detail("") {}
+};
+
+class AntiCheatMgr
+{
+    public:
+        static AntiCheatMgr* instance()
+        {
+            static AntiCheatMgr inst;
+            return &inst;
+        }
+
+        // Read config snapshot + open log channel. Called from World startup.
+        void Init();
+        // Re-read config (on .reload config). Safe to call repeatedly.
+        void LoadConfig();
+
+        bool IsEnabled() const { return m_enabled; }
+
+        // True if this player should not be validated (GM, exempt bot, etc.).
+        bool IsExempt(Player* player) const;
+
+        // The single ingress for detectors. Adds weighted score, persists,
+        // and evaluates escalation. weight is clamped to a sane range.
+        void RecordViolation(Player* player, AntiCheatViolationType type,
+                             float weight, AntiCheatContext const& ctx);
+
+        // World-tick maintenance: prune idle score entries. Cheap.
+        void Update(uint32 diff);
+
+        // Drop per-player state on logout so memory and scores don't leak.
+        void RemovePlayer(uint32 lowGuid);
+
+        // GM review: append a human-readable status line for target (or all).
+        void BuildStatus(Player* target, std::string& out);
+
+        // Config getters (cached snapshot).
+        uint32 GetSpeedTolerancePct() const { return m_speedTolerancePct; }
+        uint32 GetTeleportDistance()  const { return m_teleportDistance; }
+        bool   MovementEnabled() const { return m_enabled && m_movementEnabled; }
+        bool   PhysicsEnabled()  const { return m_enabled && m_physicsEnabled; }
+
+    private:
+        AntiCheatMgr();
+        ~AntiCheatMgr() {}
+        AntiCheatMgr(AntiCheatMgr const&);
+        AntiCheatMgr& operator=(AntiCheatMgr const&);
+
+        struct ScoreState
+        {
+            float  score;
+            uint32 lastUpdateMS;
+            uint32 violations;
+            ScoreState() : score(0.f), lastUpdateMS(0), violations(0) {}
+        };
+
+        // Lazily decay the score to "now" using the configured decay rate.
+        float DecayedScore(ScoreState& s, uint32 nowMS) const;
+
+        // Apply the highest escalation the (decayed) score warrants, capped by
+        // the configured action ceiling. The ONLY place punishment happens.
+        void Apply(Player* player, float score, AntiCheatViolationType type,
+                   AntiCheatContext const& ctx);
+
+        void Persist(Player* player, AntiCheatViolationType type, float score,
+                     AntiCheatContext const& ctx);
+        void AlertGMs(Player* player, AntiCheatViolationType type, float score,
+                      AntiCheatContext const& ctx);
+
+        bool   m_enabled;
+        bool   m_movementEnabled;
+        bool   m_physicsEnabled;
+        bool   m_exemptBots;
+        bool   m_persist;
+        uint32 m_exemptGmLevel;
+        uint32 m_actionCeiling;       // AntiCheatAction
+        uint32 m_speedTolerancePct;
+        uint32 m_teleportDistance;
+        uint32 m_scoreWarn;
+        uint32 m_scoreRubberband;
+        uint32 m_scoreKick;
+        uint32 m_decayPerSec;
+
+        std::map<uint32, ScoreState> m_scores; // keyed by character low-guid
+        std::mutex m_lock;
+};
+
+#define sAntiCheatMgr AntiCheatMgr::instance()
+
+#endif // MANGOS_ANTICHEATMGR_H
