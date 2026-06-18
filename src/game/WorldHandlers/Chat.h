@@ -253,6 +253,18 @@ class ChatHandler
         bool HandleAHBotReloadCommand(char* args);
         bool HandleAHBotStatusCommand(char* args);
 
+        // Anti-Cheat framework commands
+        bool HandleAntiCheatStatusCommand(char* args);
+        bool HandleAntiCheatReportCommand(char* args);
+        bool HandleAntiCheatReloadCommand(char* args);
+
+        // Server-side debug visualization commands
+        bool HandleDebugVisCellsCommand(char* args);
+        bool HandleDebugVisLosCommand(char* args);
+        bool HandleDebugVisPathCommand(char* args);
+        bool HandleDebugVisCollisionCommand(char* args);
+        bool HandleDebugVisHeightCommand(char* args);
+
         bool HandleAuctionAllianceCommand(char* args);
         bool HandleAuctionGoblinCommand(char* args);
         bool HandleAuctionHordeCommand(char* args);

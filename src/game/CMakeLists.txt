@@ -73,6 +73,10 @@ source_group("vmaps" FILES ${SRC_GRP_VMAPS})
 file(GLOB SRC_GRP_ANTICHEAT AntiCheat/*.cpp AntiCheat/*.h)
 source_group("AntiCheat" FILES ${SRC_GRP_ANTICHEAT})
 
+#DebugVis group
+file(GLOB SRC_GRP_DEBUGVIS DebugVis/*.cpp DebugVis/*.h)
+source_group("DebugVis" FILES ${SRC_GRP_DEBUGVIS})
+
 #Warden group
 file(GLOB SRC_GRP_WARDEN Warden/*.cpp Warden/*.h)
 source_group("Warden" FILES ${SRC_GRP_WARDEN})
@@ -240,6 +244,7 @@ add_library(game STATIC
     ${SRC_GRP_TOOL}
     ${SRC_GRP_VMAPS}
     ${SRC_GRP_ANTICHEAT}
+    ${SRC_GRP_DEBUGVIS}
     ${SRC_GRP_WARDEN}
     ${SRC_GRP_WARDEN_MODULES}
     ${SRC_GRP_WORLD_HANDLERS}
@@ -251,6 +256,7 @@ target_include_directories(game
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         AntiCheat
+        DebugVis
         AuctionHouseBot
         BattleGround
         ChatCommands

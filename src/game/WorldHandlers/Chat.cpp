@@ -241,8 +241,27 @@ ChatCommand* ChatHandler::getCommandTable()
         { NULL,             0,                  false, NULL,                                                "", NULL }
     };
 
+    static ChatCommand debugVisCommandTable[] =
+    {
+        { "cells",          SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisCellsCommand,            "", NULL },
+        { "los",            SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisLosCommand,              "", NULL },
+        { "path",           SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisPathCommand,             "", NULL },
+        { "collision",      SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisCollisionCommand,        "", NULL },
+        { "height",         SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisHeightCommand,           "", NULL },
+        { NULL,             0,                  false, NULL,                                                "", NULL }
+    };
+
+    static ChatCommand anticheatCommandTable[] =
+    {
+        { "status",         SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatStatusCommand,          "", NULL },
+        { "report",         SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatReportCommand,          "", NULL },
+        { "reload",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatReloadCommand,          "", NULL },
+        { NULL,             0,                  false, NULL,                                                "", NULL }
+    };
+
     static ChatCommand debugCommandTable[] =
     {
+        { "vis",            SEC_GAMEMASTER,     false, NULL,                                                "", debugVisCommandTable },
         { "anim",           SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugAnimCommand,                "", NULL },
         { "bg",             SEC_ADMINISTRATOR,  false, &ChatHandler::HandleDebugBattlegroundCommand,        "", NULL },
         { "getitemstate",   SEC_ADMINISTRATOR,  false, &ChatHandler::HandleDebugGetItemStateCommand,        "", NULL },
@@ -756,6 +775,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "account",        SEC_PLAYER,         true,  NULL,                                           "", accountCommandTable  },
         { "auction",        SEC_ADMINISTRATOR,  false, NULL,                                           "", auctionCommandTable  },
         { "ahbot",          SEC_ADMINISTRATOR,  true,  NULL,                                           "", ahbotCommandTable    },
+        { "anticheat",      SEC_GAMEMASTER,     true,  NULL,                                           "", anticheatCommandTable},
         { "cast",           SEC_ADMINISTRATOR,  false, NULL,                                           "", castCommandTable     },
         { "character",      SEC_GAMEMASTER,     true,  NULL,                                           "", characterCommandTable},
         { "debug",          SEC_MODERATOR,      true,  NULL,                                           "", debugCommandTable    },

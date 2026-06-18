@@ -964,6 +964,9 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_UINT32_ACDBG_GO_FLAG,          "DebugVisualizer.GO.Flag", 180778);
     setConfig(CONFIG_UINT32_ACDBG_GO_PHYSICS,       "DebugVisualizer.GO.Physics", 181227);
 
+    // Server-side debug visualization toolkit (Slice 3): GM `.debug` commands.
+    setConfigMinMax(CONFIG_UINT32_DEBUGVIS_DESPAWN, "DebugVis.DespawnSeconds", 45, 5, 600);
+
     m_relocation_ai_notify_delay = sConfig.GetIntDefault("Visibility.AIRelocationNotifyDelay", 1000u);
     m_relocation_lower_limit_sq  = pow(sConfig.GetFloatDefault("Visibility.RelocationLowerLimit", 10), 2);
 
