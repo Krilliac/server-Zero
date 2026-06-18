@@ -15,6 +15,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
 
 bool ChatHandler::HandleDebugVisCellsCommand(char* args)
 {
@@ -44,7 +45,10 @@ bool ChatHandler::HandleDebugVisCellsCommand(char* args)
             float wz = map->GetHeight(wx, wy, player->GetPositionZ() + 5.0f);
             if (wz < -50000.0f)
                 wz = player->GetPositionZ();
-            if (DebugVis::Marker(player, DebugVis::DV_CELL, wx, wy, wz))
+            char lbl[160];
+            snprintf(lbl, sizeof(lbl), "DebugVis CELL [%+d,%+d]\n(%.1f, %.1f, %.1f)  ground Z=%.1f",
+                     i, j, wx, wy, wz, wz);
+            if (DebugVis::Marker(player, DebugVis::DV_CELL, wx, wy, wz, lbl))
                 ++placed;
         }
     }
@@ -73,17 +77,25 @@ bool ChatHandler::HandleDebugVisLosCommand(char* /*args*/)
     float x1 = player->GetPositionX(), y1 = player->GetPositionY(), z1 = player->GetPositionZ() + 2.0f;
     float x2 = target->GetPositionX(), y2 = target->GetPositionY(), z2 = target->GetPositionZ() + 2.0f;
 
+    float total = sqrtf((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1));
     if (map->IsInLineOfSight(x1, y1, z1, x2, y2, z2))
     {
-        DebugVis::Line(player, DebugVis::DV_LOS_OK, x1, y1, z1, x2, y2, z2, 2.0f);
+        char lbl[160];
+        snprintf(lbl, sizeof(lbl), "DebugVis LoS: CLEAR\nto %s, %.1f yd", target->GetName(), total);
+        DebugVis::Line(player, DebugVis::DV_LOS_OK, x1, y1, z1, x2, y2, z2, 2.0f, lbl);
         SendSysMessage("DebugVis: line of sight is CLEAR (green).");
     }
     else
     {
         float hx = x2, hy = y2, hz = z2;
         map->GetHitPosition(x1, y1, z1, hx, hy, hz, -0.5f);
-        DebugVis::Line(player, DebugVis::DV_LOS_BLOCK, x1, y1, z1, hx, hy, hz, 2.0f);
-        DebugVis::Marker(player, DebugVis::DV_LOS_BLOCK, hx, hy, hz);
+        float hitDist = sqrtf((hx - x1) * (hx - x1) + (hy - y1) * (hy - y1) + (hz - z1) * (hz - z1));
+        DebugVis::Line(player, DebugVis::DV_LOS_BLOCK, x1, y1, z1, hx, hy, hz, 2.0f, "DebugVis LoS: BLOCKED");
+        char lbl[192];
+        snprintf(lbl, sizeof(lbl),
+                 "DebugVis LoS BLOCKED\nhit (%.1f, %.1f, %.1f)\n%.1f yd from you (target %.1f yd)",
+                 hx, hy, hz, hitDist, total);
+        DebugVis::Marker(player, DebugVis::DV_HITPOINT, hx, hy, hz, lbl);
         PSendSysMessage("DebugVis: line of sight BLOCKED (red); hit at (%.1f, %.1f, %.1f).", hx, hy, hz);
     }
     return true;
@@ -113,10 +125,19 @@ bool ChatHandler::HandleDebugVisPathCommand(char* /*args*/)
     DebugVis::Category cat = (type & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE | PATHFIND_NOT_USING_PATH))
                              ? DebugVis::DV_PATH_BAD : DebugVis::DV_PATH;
 
+    uint32 total = uint32(pts.size());
     uint32 placed = 0;
-    for (PointsArray::const_iterator it = pts.begin(); it != pts.end(); ++it)
-        if (DebugVis::Marker(player, cat, it->x, it->y, it->z))
+    uint32 idx = 0;
+    for (PointsArray::const_iterator it = pts.begin(); it != pts.end(); ++it, ++idx)
+    {
+        char lbl[176];
+        snprintf(lbl, sizeof(lbl),
+                 "DebugVis PATH pt %u/%u\n(%.1f, %.1f, %.1f)\ntype=0x%X (%s)",
+                 idx + 1, total, it->x, it->y, it->z, uint32(type),
+                 cat == DebugVis::DV_PATH ? "ok" : "incomplete/none");
+        if (DebugVis::Marker(player, cat, it->x, it->y, it->z, lbl))
             ++placed;
+    }
 
     PSendSysMessage("DebugVis: path type=0x%X, %u points (%s).",
                     uint32(type), placed, cat == DebugVis::DV_PATH ? "green=ok" : "red=incomplete/none");
@@ -145,14 +166,19 @@ bool ChatHandler::HandleDebugVisCollisionCommand(char* args)
     float hx = x2, hy = y2, hz = z2;
     if (map->GetHitPosition(x1, y1, z1, hx, hy, hz, -0.5f))
     {
-        DebugVis::Line(player, DebugVis::DV_COLLISION, x1, y1, z1, hx, hy, hz, 2.0f);
-        DebugVis::Marker(player, DebugVis::DV_COLLISION, hx, hy, hz);
-        PSendSysMessage("DebugVis: collision at (%.1f, %.1f, %.1f), %.1f yd ahead.",
-                        hx, hy, hz, sqrtf((hx - x1) * (hx - x1) + (hy - y1) * (hy - y1)));
+        float hitDist = sqrtf((hx - x1) * (hx - x1) + (hy - y1) * (hy - y1));
+        DebugVis::Line(player, DebugVis::DV_COLLISION, x1, y1, z1, hx, hy, hz, 2.0f, "DebugVis: collision ray");
+        char lbl[176];
+        snprintf(lbl, sizeof(lbl), "DebugVis COLLISION\nhit (%.1f, %.1f, %.1f)\n%.1f yd ahead",
+                 hx, hy, hz, hitDist);
+        DebugVis::Marker(player, DebugVis::DV_HITPOINT, hx, hy, hz, lbl);
+        PSendSysMessage("DebugVis: collision at (%.1f, %.1f, %.1f), %.1f yd ahead.", hx, hy, hz, hitDist);
     }
     else
     {
-        DebugVis::Line(player, DebugVis::DV_COLLISION, x1, y1, z1, x2, y2, z2, 2.0f);
+        char lbl[96];
+        snprintf(lbl, sizeof(lbl), "DebugVis: no collision\nwithin %.0f yd ahead", dist);
+        DebugVis::Line(player, DebugVis::DV_COLLISION, x1, y1, z1, x2, y2, z2, 2.0f, lbl);
         PSendSysMessage("DebugVis: no collision within %.0f yd ahead.", dist);
     }
     return true;
@@ -217,7 +243,10 @@ bool ChatHandler::HandleDebugVisHeightCommand(char* /*args*/)
         return true;
     }
 
-    DebugVis::Marker(player, DebugVis::DV_HEIGHT, px, py, groundZ);
+    char lbl[160];
+    snprintf(lbl, sizeof(lbl), "DebugVis HEIGHT\nground Z=%.2f\nyou Z=%.2f (delta %.2f)",
+             groundZ, pz, pz - groundZ);
+    DebugVis::Marker(player, DebugVis::DV_HEIGHT, px, py, groundZ, lbl);
     PSendSysMessage("DebugVis: ground Z=%.2f, you Z=%.2f (delta %.2f).", groundZ, pz, pz - groundZ);
     return true;
 }

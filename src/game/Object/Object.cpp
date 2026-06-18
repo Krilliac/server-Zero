@@ -2614,7 +2614,7 @@ Creature* WorldObject::SummonCreature(uint32 id, float x, float y, float z, floa
  * @param despwtime The despawn time in milliseconds.
  * @return The summoned game object, or null on failure.
  */
-GameObject* WorldObject::SummonGameObject(uint32 id, float x, float y, float z, float angle, uint32 despwtime)
+GameObject* WorldObject::SummonGameObject(uint32 id, float x, float y, float z, float angle, uint32 despwtime, uint32 displayId)
 {
     GameObject* pGameObj = new GameObject;
 
@@ -2632,6 +2632,12 @@ GameObject* WorldObject::SummonGameObject(uint32 id, float x, float y, float z, 
     }
 
     pGameObj->SetRespawnTime(despwtime/IN_MILLISECONDS);
+
+    // Optional per-instance model/colour override (used by the debug visualizer
+    // so one pooled template can render any category colour). Set before Add so
+    // the create packet carries the right display id.
+    if (displayId)
+        pGameObj->SetDisplayId(displayId);
 
     map->Add(pGameObj);
     pGameObj->AIM_Initialize();
