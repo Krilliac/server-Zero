@@ -29,6 +29,8 @@
 #include "Opcodes.h"
 #include "SpellMgr.h"
 #include "World.h"
+#include "AntiCheatMgr.h"
+#include "MovementAnticheat.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "UpdateMask.h"
@@ -533,6 +535,8 @@ Player::Player(WorldSession* session): Unit(), m_mover(this), m_camera(this), m_
     m_playerbotMgr = 0;
 #endif
 
+    m_movementAnticheat = NULL;
+
     m_transport = 0;
 
     m_speakTime = 0;
@@ -758,6 +762,14 @@ Player::~Player()
     // Perform cleanup before deleting the player object
     CleanupsBeforeDelete();
 
+    // Anti-Cheat: free the per-player movement validator and drop the score entry
+    if (m_movementAnticheat)
+    {
+        delete m_movementAnticheat;
+        m_movementAnticheat = NULL;
+    }
+    sAntiCheatMgr->RemovePlayer(GetGUIDLow());
+
     // Ensure the social object is unloaded (should already be done in PlayerLogout)
     // m_social = NULL;
 
@@ -816,6 +828,14 @@ Player::~Player()
     {
         itr->second.state->RemovePlayer(this);
     }
+}
+
+// Anti-Cheat: lazily create the per-player movement validator on first use.
+MovementAnticheat* Player::GetMovementAnticheat()
+{
+    if (!m_movementAnticheat)
+        m_movementAnticheat = new MovementAnticheat(this);
+    return m_movementAnticheat;
 }
 
 /**

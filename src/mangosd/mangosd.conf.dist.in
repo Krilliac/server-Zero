@@ -1867,6 +1867,57 @@ Warden.BanDuration           = 86400
 Warden.DBLogLevel            = 0
 
 ###################################################################################################
+#  ANTI-CHEAT / MOVEMENT-VALIDATION FRAMEWORK (Slice 1)
+#
+#    AntiCheat.Enable
+#        Master switch. 0 = framework fully inert (no hooks run). Default: 0
+#    AntiCheat.Movement.Enable / AntiCheat.Physics.Enable
+#        Enable the movement detectors / the physics-plausibility stage
+#        (only take effect when the master switch is on). Default: 1 / 1
+#    AntiCheat.ExemptBots
+#        Skip server-controlled playerbots. Default: 1
+#    AntiCheat.ExemptGMLevel
+#        Minimum account security level exempted from validation. Default: 1
+#    AntiCheat.Action
+#        Escalation ceiling: 0=off 1=log 2=GM-alert 3=rubberband 4=kick.
+#        The framework never escalates past this. Default: 1 (log only)
+#    AntiCheat.Speed.Tolerance
+#        Percent of server-allowed speed before flagging (110 = +10%). Default: 110
+#    AntiCheat.Teleport.Distance
+#        Single-packet jump (yards, latency-adjusted) that flags a teleport. Default: 50
+#    AntiCheat.Score.Warn / Rubberband / Kick
+#        Decayed-score thresholds for each escalation stage. Default: 30 / 60 / 120
+#    AntiCheat.Score.DecayPerSec
+#        Score points decayed per second (hysteresis). Default: 2
+#    AntiCheat.Persist
+#        Write violations to character_anticheat_violation. Default: 1
+#    TimeSync.Enable
+#        Maintain per-session ping/pong latency window + EWMA. Default: 1
+#    TimeSync.EWMA.Alpha
+#        EWMA smoothing alpha as a percent (20 = 0.20). Default: 20
+#    TimeSync.Desync.Threshold
+#        Latency deviation (ms) from baseline treated as a desync. Default: 1000
+#
+###################################################################################################
+
+AntiCheat.Enable             = 0
+AntiCheat.Movement.Enable    = 1
+AntiCheat.Physics.Enable     = 1
+AntiCheat.ExemptBots         = 1
+AntiCheat.ExemptGMLevel      = 1
+AntiCheat.Action             = 1
+AntiCheat.Speed.Tolerance    = 110
+AntiCheat.Teleport.Distance  = 50
+AntiCheat.Score.Warn         = 30
+AntiCheat.Score.Rubberband   = 60
+AntiCheat.Score.Kick         = 120
+AntiCheat.Score.DecayPerSec  = 2
+AntiCheat.Persist            = 1
+TimeSync.Enable              = 1
+TimeSync.EWMA.Alpha          = 20
+TimeSync.Desync.Threshold    = 1000
+
+###################################################################################################
 #  REALM STATUS FLAG
 #
 #    Realm.RecommendedOrNew.Enabled
