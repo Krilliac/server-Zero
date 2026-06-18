@@ -4,11 +4,15 @@
 
 #include "DebugVis.h"
 #include "Player.h"
+#include "GameObject.h"
+#include "Map.h"
+#include "ObjectGuid.h"
 #include "World.h"
 #include "Config/Config.h"
 
 #include <cmath>
 #include <map>
+#include <vector>
 
 namespace
 {
@@ -63,6 +67,15 @@ namespace
     {
         return uint32(DebugVis::DEBUGVIS_ENTRY_BASE) + uint32(DebugVis::DEBUGVIS_ENTRY_COUNT) - 1;
     }
+
+    // Per-placer record of spawned marker GO guids, so `.debug vis clear` can
+    // despawn them on demand (before their auto-despawn fires). Same single
+    // world thread as Marker()/Clear(), so no locking.
+    std::map<ObjectGuid, std::vector<ObjectGuid> >& MarkerOwners()
+    {
+        static std::map<ObjectGuid, std::vector<ObjectGuid> > s_owners;
+        return s_owners;
+    }
 }
 
 namespace DebugVis
@@ -99,8 +112,39 @@ namespace DebugVis
         uint32 despawnMs = DespawnSeconds() * IN_MILLISECONDS;
 
         // Colour/model is forced per-instance, independent of the pool template.
-        return viewer->SummonGameObject(entry, x, y, z, viewer->GetOrientation(),
-                                        despawnMs, ColorDisplayId(cat)) != NULL;
+        GameObject* go = viewer->SummonGameObject(entry, x, y, z, viewer->GetOrientation(),
+                                                  despawnMs, ColorDisplayId(cat));
+        if (!go)
+            return false;
+
+        MarkerOwners()[viewer->GetObjectGuid()].push_back(go->GetObjectGuid());
+        return true;
+    }
+
+    uint32 Clear(Player* viewer)
+    {
+        if (!viewer)
+            return 0;
+
+        std::map<ObjectGuid, std::vector<ObjectGuid> >& owners = MarkerOwners();
+        std::map<ObjectGuid, std::vector<ObjectGuid> >::iterator it = owners.find(viewer->GetObjectGuid());
+        if (it == owners.end())
+            return 0;
+
+        Map* map = viewer->GetMap();
+        uint32 removed = 0;
+        for (std::vector<ObjectGuid>::const_iterator g = it->second.begin(); g != it->second.end(); ++g)
+        {
+            // Skip any that already auto-despawned (GetGameObject returns NULL).
+            if (map)
+                if (GameObject* go = map->GetGameObject(*g))
+                {
+                    go->Delete();
+                    ++removed;
+                }
+        }
+        owners.erase(it);
+        return removed;
     }
 
     uint32 Line(Player* viewer, Category cat,

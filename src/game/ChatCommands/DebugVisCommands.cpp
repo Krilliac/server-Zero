@@ -250,3 +250,15 @@ bool ChatHandler::HandleDebugVisHeightCommand(char* /*args*/)
     PSendSysMessage("DebugVis: ground Z=%.2f, you Z=%.2f (delta %.2f).", groundZ, pz, pz - groundZ);
     return true;
 }
+
+bool ChatHandler::HandleDebugVisClearCommand(char* /*args*/)
+{
+    Player* player = m_session ? m_session->GetPlayer() : NULL;
+    if (!player)
+        return false;
+
+    uint32 removed = DebugVis::Clear(player);
+    PSendSysMessage("DebugVis: cleared %u of your markers (the rest had already auto-despawned). "
+                    "Markers also auto-clear after %u seconds.", removed, DebugVis::DespawnSeconds());
+    return true;
+}

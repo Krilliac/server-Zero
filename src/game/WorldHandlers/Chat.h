@@ -268,6 +268,7 @@ class ChatHandler
         bool HandleDebugVisPathCommand(char* args);
         bool HandleDebugVisCollisionCommand(char* args);
         bool HandleDebugVisHeightCommand(char* args);
+        bool HandleDebugVisClearCommand(char* args);
         bool HandleDebugPerfCommand(char* args);
         bool HandleDebugVisualCommand(char* args);
 

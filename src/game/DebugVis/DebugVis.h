@@ -61,6 +61,10 @@ namespace DebugVis
                 float x1, float y1, float z1, float x2, float y2, float z2,
                 float spacing, const std::string& label = std::string());
 
+    // Immediately despawn all markers the given viewer has placed (that haven't
+    // already auto-despawned). Returns how many were removed.
+    uint32 Clear(Player* viewer);
+
     // True if `entry` belongs to the reserved debug-marker pool.
     bool IsDebugEntry(uint32 entry);
 

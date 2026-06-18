@@ -970,7 +970,7 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_UINT32_ACDBG_GO_PHYSICS,       "DebugVisualizer.GO.Physics", 181227);
 
     // Server-side debug visualization toolkit (Slice 3): GM `.debug` commands.
-    setConfigMinMax(CONFIG_UINT32_DEBUGVIS_DESPAWN, "DebugVis.DespawnSeconds", 45, 5, 600);
+    setConfigMinMax(CONFIG_UINT32_DEBUGVIS_DESPAWN, "DebugVis.DespawnSeconds", 30, 5, 600);
 
     // Anti-Cheat anti-gaming autoban (Slice 4). Account-level kick accumulation
     // with slow (hours) decay so spacing offences out still accumulates; ban

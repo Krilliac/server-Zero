@@ -248,6 +248,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "path",           SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisPathCommand,             "", NULL },
         { "collision",      SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisCollisionCommand,        "", NULL },
         { "height",         SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisHeightCommand,           "", NULL },
+        { "clear",          SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisClearCommand,            "", NULL },
         { NULL,             0,                  false, NULL,                                                "", NULL }
     };
 
