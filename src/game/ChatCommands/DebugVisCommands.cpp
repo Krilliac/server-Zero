@@ -154,6 +154,30 @@ bool ChatHandler::HandleDebugVisCollisionCommand(char* args)
     return true;
 }
 
+bool ChatHandler::HandleDebugVisualCommand(char* args)
+{
+    Player* player = m_session ? m_session->GetPlayer() : NULL;
+    if (!player)
+        return false;
+    if (!args || !*args)
+    {
+        SendSysMessage("Usage: .debug visual <SpellVisualKit id> - plays a visual on you "
+                       "(nearby players see it). Try 243, 5001, 6700, 2950, 8734, 15533, 16794.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    uint32 id = uint32(atoi(args));
+    if (!id)
+    {
+        SendSysMessage("DebugVis: invalid visual id.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    player->PlaySpellVisual(id);
+    PSendSysMessage("DebugVis: played spell visual kit %u on you (visible to nearby players).", id);
+    return true;
+}
+
 bool ChatHandler::HandleDebugPerfCommand(char* args)
 {
     if (args && *args && (*args == 'r' || *args == 'R'))

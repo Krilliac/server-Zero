@@ -904,6 +904,10 @@ class WorldObject : public Object
         void PlayDistanceSound(uint32 sound_id, Player const* target = NULL) const;
         void PlayDirectSound(uint32 sound_id, Player const* target = NULL) const;
         void PlayMusic(uint32 sound_id, Player const* target = NULL) const;
+        // Play a SpellVisualKit on this object (SMSG_PLAY_SPELL_VISUAL). Broadcast
+        // to nearby players, or to a single target if given. Used by the debug
+        // visualizer for dynamic, on-unit visual cues.
+        void PlaySpellVisual(uint32 kitId, Player const* target = NULL) const;
 
         void SendObjectDeSpawnAnim(ObjectGuid guid);
 

@@ -6,6 +6,7 @@
 #include "DebugVisualizer.h"
 #include "Player.h"
 #include "World.h"
+#include "Config/Config.h"
 #include "Log.h"
 
 namespace
@@ -56,6 +57,12 @@ namespace DebugVisualizer
         if (!Enabled())
             return;
         Spawn(player, EntryForViolation(type), x, y, z);
+
+        // Optional dynamic cue: play a SpellVisualKit on the offender (more
+        // visible than a static marker). 0 = off. Configurable kit id.
+        uint32 vkit = uint32(sConfig.GetIntDefault("DebugVisualizer.ViolationVisual", 0));
+        if (vkit && player && player->IsInWorld())
+            player->PlaySpellVisual(vkit);
     }
 
     void Trace(Player* player, AntiCheatMoveState /*state*/, float x, float y, float z)

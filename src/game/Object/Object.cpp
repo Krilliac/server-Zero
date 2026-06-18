@@ -2996,6 +2996,21 @@ void WorldObject::PlayDirectSound(uint32 sound_id, Player const* target /*= NULL
     }
 }
 
+void WorldObject::PlaySpellVisual(uint32 kitId, Player const* target /*= NULL*/) const
+{
+    WorldPacket data(SMSG_PLAY_SPELL_VISUAL, 8 + 4);
+    data << GetObjectGuid();
+    data << uint32(kitId);                                   // index from SpellVisualKit.dbc
+    if (target)
+    {
+        target->SendDirectMessage(&data);
+    }
+    else
+    {
+        SendMessageToSet(&data, true);
+    }
+}
+
 /**
  * @brief Plays music for one player or nearby players.
  *

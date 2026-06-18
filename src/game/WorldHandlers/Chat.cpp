@@ -267,6 +267,7 @@ ChatCommand* ChatHandler::getCommandTable()
     {
         { "vis",            SEC_GAMEMASTER,     false, NULL,                                                "", debugVisCommandTable },
         { "perf",           SEC_GAMEMASTER,     true,  &ChatHandler::HandleDebugPerfCommand,                "", NULL },
+        { "visual",         SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugVisualCommand,              "", NULL },
         { "anim",           SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugAnimCommand,                "", NULL },
         { "bg",             SEC_ADMINISTRATOR,  false, &ChatHandler::HandleDebugBattlegroundCommand,        "", NULL },
         { "getitemstate",   SEC_ADMINISTRATOR,  false, &ChatHandler::HandleDebugGetItemStateCommand,        "", NULL },
