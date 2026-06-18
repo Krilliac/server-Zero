@@ -21,6 +21,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 #include <mutex>
 
 class Player;
@@ -91,6 +92,25 @@ class AntiCheatMgr
             ScoreState() : score(0.f), lastUpdateMS(0), violations(0) {}
         };
 
+        // Per-account anti-gaming state for autoban. Decays slowly (hours) using
+        // wall-clock time so it survives restarts and so spacing offences out
+        // does not evade the ban.
+        struct AccountState
+        {
+            float  kickScore;
+            uint32 banCount;
+            uint32 lastUpdate;  // unix seconds (sWorld.GetGameTime)
+            AccountState() : kickScore(0.f), banCount(0), lastUpdate(0) {}
+        };
+
+        // A ban decided on a worker/map thread, applied later on the world thread.
+        struct PendingBan
+        {
+            std::string charName;   // BAN_CHARACTER bans the owning account
+            uint32 durationSecs;    // 0 = permanent
+            std::string reason;
+        };
+
         // Lazily decay the score to "now" using the configured decay rate.
         float DecayedScore(ScoreState& s, uint32 nowMS) const;
 
@@ -103,6 +123,14 @@ class AntiCheatMgr
                      AntiCheatContext const& ctx);
         void AlertGMs(Player* player, AntiCheatViolationType type, float score,
                       AntiCheatContext const& ctx);
+
+        // Anti-gaming autoban: accumulate a kick against the player's account and,
+        // if the decayed account score crosses the threshold, queue an escalating
+        // ban (applied on the world thread in Update()). Called from Apply() on KICK.
+        void AccumulateKick(Player* player);
+        float DecayedKickScore(AccountState& s, uint32 nowSec) const;
+        void LoadAccounts();
+        void PersistAccount(uint32 accountId, AccountState const& s);
 
         bool   m_enabled;
         bool   m_movementEnabled;
@@ -118,7 +146,16 @@ class AntiCheatMgr
         uint32 m_scoreKick;
         uint32 m_decayPerSec;
 
-        std::map<uint32, ScoreState> m_scores; // keyed by character low-guid
+        // Autoban config (Slice 4)
+        bool   m_autobanEnable;
+        uint32 m_autobanKickPoints;
+        uint32 m_autobanThreshold;
+        uint32 m_autobanDecayPerHour;
+        uint32 m_autobanDur[3];
+
+        std::map<uint32, ScoreState>   m_scores;   // keyed by character low-guid
+        std::map<uint32, AccountState> m_accounts; // keyed by account id (autoban)
+        std::vector<PendingBan>        m_pendingBans;
         std::mutex m_lock;
 };
 

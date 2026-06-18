@@ -1913,6 +1913,22 @@ AntiCheat.Score.Rubberband   = 60
 AntiCheat.Score.Kick         = 120
 AntiCheat.Score.DecayPerSec  = 2
 AntiCheat.Persist            = 1
+#    Anti-gaming autoban (Slice 4): per-ACCOUNT kick accumulation with slow
+#    (hours) decay, so a cheater who spaces offences out still accumulates a ban.
+#    Ban duration escalates by prior ban count. Requires AntiCheat.Enable=1 and a
+#    KICK-capable AntiCheat.Action (>=4). Off by default.
+#       AntiCheat.Autoban.Enable        master switch (default 0)
+#       AntiCheat.Autoban.KickPoints    points added per kick (default 10)
+#       AntiCheat.Autoban.Threshold     decayed score that triggers a ban (default 30)
+#       AntiCheat.Autoban.DecayPerHour  points decayed per hour (default 1 -> days)
+#       AntiCheat.Autoban.Duration1/2/3 ban seconds for 1st/2nd/3rd+ ban (0=permanent)
+AntiCheat.Autoban.Enable     = 0
+AntiCheat.Autoban.KickPoints = 10
+AntiCheat.Autoban.Threshold  = 30
+AntiCheat.Autoban.DecayPerHour = 1
+AntiCheat.Autoban.Duration1  = 86400
+AntiCheat.Autoban.Duration2  = 604800
+AntiCheat.Autoban.Duration3  = 0
 TimeSync.Enable              = 1
 TimeSync.EWMA.Alpha          = 20
 TimeSync.Desync.Threshold    = 1000

@@ -967,6 +967,17 @@ void World::LoadConfigSettings(bool reload)
     // Server-side debug visualization toolkit (Slice 3): GM `.debug` commands.
     setConfigMinMax(CONFIG_UINT32_DEBUGVIS_DESPAWN, "DebugVis.DespawnSeconds", 45, 5, 600);
 
+    // Anti-Cheat anti-gaming autoban (Slice 4). Account-level kick accumulation
+    // with slow (hours) decay so spacing offences out still accumulates; ban
+    // duration escalates. Off by default (needs AntiCheat.Enable too).
+    setConfig(CONFIG_BOOL_AC_AUTOBAN_ENABLE,            "AntiCheat.Autoban.Enable", false);
+    setConfigMinMax(CONFIG_UINT32_AC_AUTOBAN_KICKPOINTS, "AntiCheat.Autoban.KickPoints", 10, 1, 1000);
+    setConfigMinMax(CONFIG_UINT32_AC_AUTOBAN_THRESHOLD,  "AntiCheat.Autoban.Threshold", 30, 1, 100000);
+    setConfigMinMax(CONFIG_UINT32_AC_AUTOBAN_DECAY_PER_HOUR, "AntiCheat.Autoban.DecayPerHour", 1, 0, 1000);
+    setConfig(CONFIG_UINT32_AC_AUTOBAN_DUR1,            "AntiCheat.Autoban.Duration1", 86400);   // 1 day
+    setConfig(CONFIG_UINT32_AC_AUTOBAN_DUR2,            "AntiCheat.Autoban.Duration2", 604800);  // 7 days
+    setConfig(CONFIG_UINT32_AC_AUTOBAN_DUR3,            "AntiCheat.Autoban.Duration3", 0);       // 0 = permanent
+
     m_relocation_ai_notify_delay = sConfig.GetIntDefault("Visibility.AIRelocationNotifyDelay", 1000u);
     m_relocation_lower_limit_sq  = pow(sConfig.GetFloatDefault("Visibility.RelocationLowerLimit", 10), 2);
 
