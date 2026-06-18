@@ -69,7 +69,10 @@ bool AntiCheatMgr::IsExempt(Player* player) const
         return true;
 
     // GMs at or above the configured security level are not validated.
-    if (player->GetSession() && player->GetSession()->GetSecurity() >= (AccountTypes)m_exemptGmLevel)
+    // ExemptGMLevel == 0 means "exempt nobody by level" (every account is >= 0,
+    // so without this guard a value of 0 would exempt everyone).
+    if (m_exemptGmLevel > 0 && player->GetSession() &&
+        player->GetSession()->GetSecurity() >= (AccountTypes)m_exemptGmLevel)
         return true;
 
     // A GM with .gm on is also exempt regardless of level.
