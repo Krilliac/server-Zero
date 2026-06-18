@@ -10,6 +10,7 @@
 #include "Player.h"
 #include "World.h"
 #include "Unit.h"
+#include "Opcodes.h"
 #include "Timer.h"
 
 #include <cmath>
@@ -19,6 +20,7 @@ namespace
     const float  VERT_CLIMB_SUSPECT = 5.0f;   // yd upward in one packet on ground
     const float  SPEED_SLACK_YD     = 2.0f;   // constant distance fudge per packet
     const uint32 GAP_RESET_MS       = 3000;   // packet gap implying load/teleport
+    const float  FALL_SUPPRESS_YD   = 20.0f;  // drop beyond this should incur fall damage
 }
 
 MovementAnticheat::MovementAnticheat(Player* owner)
@@ -26,7 +28,8 @@ MovementAnticheat::MovementAnticheat(Player* owner)
       m_lastX(0.f), m_lastY(0.f), m_lastZ(0.f), m_lastO(0.f),
       m_lastMS(0), m_lastFlags(0),
       m_hasValid(false), m_validX(0.f), m_validY(0.f), m_validZ(0.f), m_validO(0.f),
-      m_hasTrace(false), m_traceX(0.f), m_traceY(0.f), m_traceZ(0.f)
+      m_hasTrace(false), m_traceX(0.f), m_traceY(0.f), m_traceZ(0.f),
+      m_airborne(false), m_fallApexZ(0.f)
 {
 }
 
@@ -43,7 +46,7 @@ AntiCheatMoveState MovementAnticheat::NormalizeState(MovementInfo const& mi) con
     return AC_MOVE_GROUND;
 }
 
-void MovementAnticheat::HandlePositionUpdate(uint16 /*opcode*/, MovementInfo const& mi)
+void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& mi)
 {
     if (!m_player || !sAntiCheatMgr->MovementEnabled())
         return;
@@ -63,6 +66,8 @@ void MovementAnticheat::HandlePositionUpdate(uint16 /*opcode*/, MovementInfo con
         m_lastMS = nowMS; m_lastFlags = mi.GetMovementFlags();
         m_hasValid = true;
         m_validX = pos->x; m_validY = pos->y; m_validZ = pos->z; m_validO = pos->o;
+        m_airborne = (state == AC_MOVE_FALL);
+        m_fallApexZ = pos->z;
         return;
     }
 
@@ -154,6 +159,48 @@ void MovementAnticheat::HandlePositionUpdate(uint16 /*opcode*/, MovementInfo con
             ctx.detail = reason ? reason : "physics suspect";
             sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 10.0f, ctx);
         }
+    }
+
+    // --- Detectors: illegal jump (infinite/double jump) + fall-damage suppression ---
+    if (opcode == MSG_MOVE_JUMP)
+    {
+        // A jump issued while already airborne (no FALL_LAND since the last jump
+        // or fall) is an illegal mid-air / infinite jump.
+        if (m_airborne)
+        {
+            ctx.detail = "mid-air / infinite jump";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_JUMP, 30.0f, ctx);
+            cheapTrip = true;
+        }
+        m_airborne = true;
+        m_fallApexZ = pos->z;
+    }
+    else if (state == AC_MOVE_FALL)
+    {
+        // In a fall/jump arc: track the episode and its apex.
+        m_airborne = true;
+        if (pos->z > m_fallApexZ)
+            m_fallApexZ = pos->z;
+    }
+    else if (m_airborne)
+    {
+        // Episode ended this packet. A legit landing sends MSG_MOVE_FALL_LAND and
+        // the core applies fall damage. Becoming grounded WITHOUT a FALL_LAND after
+        // a damaging drop (and not into water) means the client suppressed fall damage.
+        float drop = m_fallApexZ - pos->z;
+        if (opcode != MSG_MOVE_FALL_LAND && state != AC_MOVE_SWIM && drop >= FALL_SUPPRESS_YD)
+        {
+            ctx.detail = "fall-damage suppressed (no FALL_LAND)";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_FALL, 25.0f, ctx);
+            cheapTrip = true;
+        }
+        m_airborne = false;
+        m_fallApexZ = pos->z;
+    }
+    else
+    {
+        // Grounded: keep the apex tracking current so the next fall measures from here.
+        m_fallApexZ = pos->z;
     }
 
     // Update the rolling baseline. Track last clean position for rubberband use

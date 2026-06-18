@@ -56,6 +56,10 @@ class MovementAnticheat
         // Debug-visualizer movement trace (distance rate-limited).
         bool   m_hasTrace;
         float  m_traceX, m_traceY, m_traceZ;
+
+        // Jump / fall state machine (infinite-jump + fall-damage-suppression).
+        bool   m_airborne;     // in a jump/fall episode (no FALL_LAND yet)
+        float  m_fallApexZ;    // highest Z reached during the current airborne episode
 };
 
 #endif // MANGOS_ANTICHEAT_MOVEMENTANTICHEAT_H

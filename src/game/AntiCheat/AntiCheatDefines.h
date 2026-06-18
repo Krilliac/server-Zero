@@ -23,6 +23,8 @@ enum AntiCheatViolationType
     AC_VIOLATION_FLAG_CONTRADICT = 4,   // movement flags that the server never granted
     AC_VIOLATION_PHYSICS         = 5,   // position implausible vs terrain/liquid/collision
     AC_VIOLATION_DESYNC          = 6,   // latency drift / time-sync anomaly (informational)
+    AC_VIOLATION_JUMP            = 7,   // illegal mid-air / infinite jump (re-jump while airborne)
+    AC_VIOLATION_FALL            = 8,   // fall-damage suppression (big drop, no FALL_LAND)
 
     AC_VIOLATION_MAX
 };
