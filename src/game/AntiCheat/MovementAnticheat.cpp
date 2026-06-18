@@ -32,7 +32,8 @@ MovementAnticheat::MovementAnticheat(Player* owner)
       m_hasValid(false), m_validX(0.f), m_validY(0.f), m_validZ(0.f), m_validO(0.f),
       m_hasTrace(false), m_traceX(0.f), m_traceY(0.f), m_traceZ(0.f),
       m_airborne(false), m_fallApexZ(0.f),
-      m_burstWinStartMS(0), m_burstCount(0), m_lastClientTime(0), m_hasClientTime(false)
+      m_burstWinStartMS(0), m_burstCount(0), m_lastClientTime(0), m_hasClientTime(false),
+      m_hasClockOffset(false), m_clockOffsetMs(0)
 {
 }
 
@@ -116,6 +117,13 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
         }
         m_lastClientTime = ct;
         m_hasClientTime = true;
+
+        // Movement-sync clock-offset service: smoothed (serverMs - clientTime).
+        // Absolute value is arbitrary (different epochs); its drift over time is
+        // the desync signal, and it backs the optional relay correction.
+        int64 sampleOffset = int64(nowMS) - int64(ct);
+        if (!m_hasClockOffset) { m_clockOffsetMs = sampleOffset; m_hasClockOffset = true; }
+        else { m_clockOffsetMs = (sampleOffset * 20 + m_clockOffsetMs * 80) / 100; }
     }
 
     uint32 dtMS = getMSTimeDiff(m_lastMS, nowMS);

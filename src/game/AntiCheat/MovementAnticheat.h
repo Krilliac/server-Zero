@@ -31,6 +31,13 @@ class MovementAnticheat
         // movement packets are sent (e.g. standing inside geometry).
         void PeriodicCheck();
 
+        // Movement-sync clock service: smoothed offset between the server clock
+        // (getMSTime) and the client's reported movement timestamps. Its drift over
+        // time is the desync signal; consumers (detection + optional relay
+        // correction) read it. Valid once HasClockOffset() is true.
+        bool   HasClockOffset() const { return m_hasClockOffset; }
+        int64  GetClockOffsetMs() const { return m_clockOffsetMs; }
+
         // Called when the SERVER relocates the player (teleport ack, map change)
         // so the next client packet is trusted and the baseline is rebuilt
         // instead of being scored as an impossible jump.
@@ -71,6 +78,10 @@ class MovementAnticheat
         uint32 m_burstCount;       // movement packets seen in the current window
         uint32 m_lastClientTime;   // last MovementInfo client timestamp
         bool   m_hasClientTime;
+
+        // Movement-sync clock-offset service (smoothed server-vs-client clock).
+        bool   m_hasClockOffset;
+        int64  m_clockOffsetMs;
 };
 
 #endif // MANGOS_ANTICHEAT_MOVEMENTANTICHEAT_H

@@ -58,6 +58,8 @@
 #include "Opcodes.h"
 #include "Log.h"
 #include "Player.h"
+#include "Timer.h"
+#include "World.h"
 #include "AntiCheatMgr.h"
 #include "MovementAnticheat.h"
 #include "MapManager.h"
@@ -368,6 +370,13 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recv_data)
     {
         plMover->UpdateFallInformationIfNeed(movementInfo, opcode);
     }
+
+    // Movement-sync (Slice 10): optionally normalise the timestamp relayed to
+    // other players to the server clock, so all observers interpolate movement on
+    // one consistent timebase (reduces other-player warp/stutter). Gated, OFF by
+    // default; only affects the broadcast copy, not the applied/stored state.
+    if (sWorld.getConfig(CONFIG_BOOL_TIMESYNC_MOVE_CORRECTION))
+        movementInfo.UpdateTime(getMSTime());
 
     WorldPacket data(opcode, uint16(recv_data.size() + 2));
     data << mover->GetPackGUID();             // write guid

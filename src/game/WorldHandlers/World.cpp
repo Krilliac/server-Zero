@@ -950,6 +950,10 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_TIMESYNC_ENABLE,          "TimeSync.Enable", true);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_ALPHA,   "TimeSync.EWMA.Alpha", 20, 1, 100);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_DESYNC,  "TimeSync.Desync.Threshold", 1000, 100, 60000);
+    // Movement-sync corrective option: normalise relayed movement timestamps to
+    // the server clock so observers interpolate other players on one timebase.
+    // Higher-risk movement netcode — OFF by default for A/B testing.
+    setConfig(CONFIG_BOOL_TIMESYNC_MOVE_CORRECTION, "TimeSync.MovementCorrection", false);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.
