@@ -6,6 +6,7 @@
 
 #include "Chat.h"
 #include "DebugVis.h"
+#include "PerformanceMonitor.h"
 #include "Player.h"
 #include "Map.h"
 #include "World.h"
@@ -150,6 +151,22 @@ bool ChatHandler::HandleDebugVisCollisionCommand(char* args)
         DebugVis::Line(player, DebugVis::DV_COLLISION, x1, y1, z1, x2, y2, z2, 2.0f);
         PSendSysMessage("DebugVis: no collision within %.0f yd ahead.", dist);
     }
+    return true;
+}
+
+bool ChatHandler::HandleDebugPerfCommand(char* args)
+{
+    if (args && *args && (*args == 'r' || *args == 'R'))
+    {
+        PerformanceMonitor::Reset();
+        SendSysMessage("PerformanceMonitor: stats reset.");
+        return true;
+    }
+
+    uint32 ticks, avgMs, maxMs, lastMs;
+    PerformanceMonitor::GetStats(ticks, avgMs, maxMs, lastMs);
+    PSendSysMessage("Server perf: world ticks=%u  avg=%ums  max=%ums  last=%ums  (.debug perf r to reset)",
+                    ticks, avgMs, maxMs, lastMs);
     return true;
 }
 

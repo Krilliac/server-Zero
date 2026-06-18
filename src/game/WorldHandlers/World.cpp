@@ -111,6 +111,7 @@
 
 // ANTICHEAT
 #include "AntiCheatMgr.h"
+#include "PerformanceMonitor.h"
 
 #include <iostream>
 #include <sstream>
@@ -1846,6 +1847,9 @@ void World::DetectDBCLang()
 /// Update the World !
 void World::Update(uint32 diff)
 {
+    ///- Record world-tick timing for the performance monitor (.debug perf)
+    PerformanceMonitor::TrackUpdate(diff);
+
     ///- Update the different timers
     for (int i = 0; i < WUPDATE_COUNT; ++i)
     {

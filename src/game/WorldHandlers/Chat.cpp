@@ -262,6 +262,7 @@ ChatCommand* ChatHandler::getCommandTable()
     static ChatCommand debugCommandTable[] =
     {
         { "vis",            SEC_GAMEMASTER,     false, NULL,                                                "", debugVisCommandTable },
+        { "perf",           SEC_GAMEMASTER,     true,  &ChatHandler::HandleDebugPerfCommand,                "", NULL },
         { "anim",           SEC_GAMEMASTER,     false, &ChatHandler::HandleDebugAnimCommand,                "", NULL },
         { "bg",             SEC_ADMINISTRATOR,  false, &ChatHandler::HandleDebugBattlegroundCommand,        "", NULL },
         { "getitemstate",   SEC_ADMINISTRATOR,  false, &ChatHandler::HandleDebugGetItemStateCommand,        "", NULL },
