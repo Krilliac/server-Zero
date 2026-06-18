@@ -94,17 +94,25 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
         sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_BURST, 15.0f, bctx);
     }
 
-    // --- Detector: client movement-timestamp regression ---
+    // --- Detector: client movement-timestamp regression --- (also capture the
+    // client-reported time delta for the time-sync divergence check below)
+    uint32 clientDt = 0;
+    bool   haveClientDt = false;
     {
         uint32 ct = mi.GetTime();
-        if (m_hasClientTime && m_lastClientTime > ct && (m_lastClientTime - ct) > CLIENT_TIME_BACK_MS)
+        if (m_hasClientTime)
         {
-            AntiCheatContext tctx;
-            tctx.mapId = m_player->GetMapId();
-            tctx.x = pos->x; tctx.y = pos->y; tctx.z = pos->z;
-            tctx.latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
-            tctx.detail = "client timestamp regression";
-            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PACKETTIMING, 10.0f, tctx);
+            haveClientDt = true;
+            clientDt = (ct >= m_lastClientTime) ? (ct - m_lastClientTime) : 0;
+            if (m_lastClientTime > ct && (m_lastClientTime - ct) > CLIENT_TIME_BACK_MS)
+            {
+                AntiCheatContext tctx;
+                tctx.mapId = m_player->GetMapId();
+                tctx.x = pos->x; tctx.y = pos->y; tctx.z = pos->z;
+                tctx.latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
+                tctx.detail = "client timestamp regression";
+                sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PACKETTIMING, 10.0f, tctx);
+            }
         }
         m_lastClientTime = ct;
         m_hasClientTime = true;
@@ -170,6 +178,31 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
             ctx.detail = "speed over allowed";
             sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_SPEED, weight, ctx);
             cheapTrip = true;
+        }
+    }
+
+    // --- Detector: time-sync divergence (client vs server elapsed time) ---
+    // The client's reported elapsed time should track the server's measured
+    // elapsed time within latency jitter. Zero client-time while moving, or a
+    // large divergence, is time-manipulation desync (fake-slow movement / speed
+    // via clock control) — the vanilla-compatible equivalent of WotLK time sync.
+    if (haveClientDt && horiz > 1.0f && state != AC_MOVE_TRANSPORT)
+    {
+        uint32 tol = sWorld.getConfig(CONFIG_UINT32_TIMESYNC_DESYNC) + latency;
+        if (clientDt == 0)
+        {
+            ctx.detail = "zero client time while moving (time hack)";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_DESYNC, 20.0f, ctx);
+            cheapTrip = true;
+        }
+        else
+        {
+            uint32 div = clientDt > dtMS ? clientDt - dtMS : dtMS - clientDt;
+            if (div > tol)
+            {
+                ctx.detail = "client/server time divergence (desync)";
+                sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_DESYNC, 8.0f, ctx);
+            }
         }
     }
 
