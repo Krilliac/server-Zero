@@ -4,6 +4,7 @@
  */
 
 #include "AntiCheatMgr.h"
+#include "DebugVisualizer.h"
 #include "Player.h"
 #include "World.h"
 #include "Log.h"
@@ -105,6 +106,10 @@ void AntiCheatMgr::RecordViolation(Player* player, AntiCheatViolationType type,
 
     if (m_persist)
         Persist(player, type, score, ctx);
+
+    // Debug visualizer: drop a colour-coded marker for this violation (no-op
+    // unless the visualizer is enabled in config).
+    DebugVisualizer::Mark(player, type, ctx.x, ctx.y, ctx.z);
 
     Apply(player, score, type, ctx);
 }

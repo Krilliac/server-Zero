@@ -1917,6 +1917,29 @@ TimeSync.Enable              = 1
 TimeSync.EWMA.Alpha          = 20
 TimeSync.Desync.Threshold    = 1000
 
+#    Debug Visualizer (Slice 2) — diagnostic only, no gameplay effect.
+#    When enabled (requires AntiCheat.Enable=1) the server spawns temporary,
+#    colour-coded gameobjects trailing players to visualise the detection
+#    pipeline. Useful on a test realm, often with AntiCheat.ExemptBots=0 so
+#    playerbots drive the detectors. Every GO.* entry is a gameobject_template
+#    entry and can be swapped for any model/colour you prefer.
+#       DebugVisualizer.Enable           master switch (default 0)
+#       DebugVisualizer.TraceMovement    marker on every accepted move (default 0)
+#       DebugVisualizer.DespawnSeconds   marker lifetime (default 30)
+#       DebugVisualizer.TraceMinDistance min yards between trace markers (default 3)
+#       DebugVisualizer.GO.*             marker GO entry per category
+DebugVisualizer.Enable           = 0
+DebugVisualizer.TraceMovement    = 0
+DebugVisualizer.DespawnSeconds   = 30
+DebugVisualizer.TraceMinDistance = 3
+DebugVisualizer.GO.Movement      = 180773
+DebugVisualizer.GO.TimeSync      = 180774
+DebugVisualizer.GO.Speed         = 180775
+DebugVisualizer.GO.Teleport      = 180776
+DebugVisualizer.GO.Vertical      = 180777
+DebugVisualizer.GO.Flag          = 180778
+DebugVisualizer.GO.Physics       = 181227
+
 ###################################################################################################
 #  REALM STATUS FLAG
 #

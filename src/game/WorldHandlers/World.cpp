@@ -950,6 +950,20 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_ALPHA,   "TimeSync.EWMA.Alpha", 20, 1, 100);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_DESYNC,  "TimeSync.Desync.Threshold", 1000, 100, 60000);
 
+    // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
+    // colour-coded gameobjects trailing the player for diagnostics only.
+    setConfig(CONFIG_BOOL_ACDBG_ENABLE,             "DebugVisualizer.Enable", false);
+    setConfig(CONFIG_BOOL_ACDBG_TRACE,              "DebugVisualizer.TraceMovement", false);
+    setConfigMinMax(CONFIG_UINT32_ACDBG_DESPAWN,    "DebugVisualizer.DespawnSeconds", 30, 1, 600);
+    setConfigMinMax(CONFIG_UINT32_ACDBG_TRACE_MINDIST, "DebugVisualizer.TraceMinDistance", 3, 1, 100);
+    setConfig(CONFIG_UINT32_ACDBG_GO_MOVEMENT,      "DebugVisualizer.GO.Movement", 180773);
+    setConfig(CONFIG_UINT32_ACDBG_GO_TIMESYNC,      "DebugVisualizer.GO.TimeSync", 180774);
+    setConfig(CONFIG_UINT32_ACDBG_GO_SPEED,         "DebugVisualizer.GO.Speed", 180775);
+    setConfig(CONFIG_UINT32_ACDBG_GO_TELEPORT,      "DebugVisualizer.GO.Teleport", 180776);
+    setConfig(CONFIG_UINT32_ACDBG_GO_VERTICAL,      "DebugVisualizer.GO.Vertical", 180777);
+    setConfig(CONFIG_UINT32_ACDBG_GO_FLAG,          "DebugVisualizer.GO.Flag", 180778);
+    setConfig(CONFIG_UINT32_ACDBG_GO_PHYSICS,       "DebugVisualizer.GO.Physics", 181227);
+
     m_relocation_ai_notify_delay = sConfig.GetIntDefault("Visibility.AIRelocationNotifyDelay", 1000u);
     m_relocation_lower_limit_sq  = pow(sConfig.GetFloatDefault("Visibility.RelocationLowerLimit", 10), 2);
 

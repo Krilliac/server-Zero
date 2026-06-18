@@ -6,7 +6,9 @@
 #include "MovementAnticheat.h"
 #include "AntiCheatMgr.h"
 #include "PhysicsValidator.h"
+#include "DebugVisualizer.h"
 #include "Player.h"
+#include "World.h"
 #include "Unit.h"
 #include "Timer.h"
 
@@ -23,7 +25,8 @@ MovementAnticheat::MovementAnticheat(Player* owner)
     : m_player(owner), m_hasLast(false), m_trustNext(false),
       m_lastX(0.f), m_lastY(0.f), m_lastZ(0.f), m_lastO(0.f),
       m_lastMS(0), m_lastFlags(0),
-      m_hasValid(false), m_validX(0.f), m_validY(0.f), m_validZ(0.f), m_validO(0.f)
+      m_hasValid(false), m_validX(0.f), m_validY(0.f), m_validZ(0.f), m_validO(0.f),
+      m_hasTrace(false), m_traceX(0.f), m_traceY(0.f), m_traceZ(0.f)
 {
 }
 
@@ -161,5 +164,18 @@ void MovementAnticheat::HandlePositionUpdate(uint16 /*opcode*/, MovementInfo con
     {
         m_hasValid = true;
         m_validX = pos->x; m_validY = pos->y; m_validZ = pos->z; m_validO = pos->o;
+    }
+
+    // Debug visualizer: drop a movement-trace marker, rate-limited by distance.
+    if (DebugVisualizer::TraceEnabled())
+    {
+        float tdx = pos->x - m_traceX, tdy = pos->y - m_traceY, tdz = pos->z - m_traceZ;
+        float minD = float(sWorld.getConfig(CONFIG_UINT32_ACDBG_TRACE_MINDIST));
+        if (!m_hasTrace || (tdx * tdx + tdy * tdy + tdz * tdz) >= minD * minD)
+        {
+            DebugVisualizer::Trace(m_player, state, pos->x, pos->y, pos->z);
+            m_hasTrace = true;
+            m_traceX = pos->x; m_traceY = pos->y; m_traceZ = pos->z;
+        }
     }
 }

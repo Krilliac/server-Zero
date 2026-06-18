@@ -52,6 +52,10 @@ class MovementAnticheat
 
         bool   m_hasValid;
         float  m_validX, m_validY, m_validZ, m_validO;
+
+        // Debug-visualizer movement trace (distance rate-limited).
+        bool   m_hasTrace;
+        float  m_traceX, m_traceY, m_traceZ;
 };
 
 #endif // MANGOS_ANTICHEAT_MOVEMENTANTICHEAT_H
