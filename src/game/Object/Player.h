@@ -4046,6 +4046,7 @@ class Player : public Unit
 
         // Anti-Cheat: per-player movement validator (NULL until first use)
         MovementAnticheat* m_movementAnticheat;
+        uint32 m_acPosTimer;   // countdown for periodic idle-position re-validation
 
 #ifdef ENABLE_PLAYERBOTS
         // Player bot AI

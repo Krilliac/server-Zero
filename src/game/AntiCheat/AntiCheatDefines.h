@@ -25,6 +25,8 @@ enum AntiCheatViolationType
     AC_VIOLATION_DESYNC          = 6,   // latency drift / time-sync anomaly (informational)
     AC_VIOLATION_JUMP            = 7,   // illegal mid-air / infinite jump (re-jump while airborne)
     AC_VIOLATION_FALL            = 8,   // fall-damage suppression (big drop, no FALL_LAND)
+    AC_VIOLATION_BURST           = 9,   // abnormal burst of movement packets (flood/timing)
+    AC_VIOLATION_PACKETTIMING    = 10,  // client movement timestamp inconsistency
 
     AC_VIOLATION_MAX
 };

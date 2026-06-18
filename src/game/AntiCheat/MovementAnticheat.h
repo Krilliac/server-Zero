@@ -26,6 +26,11 @@ class MovementAnticheat
         // is parsed and before it is applied. opcode is the movement opcode.
         void HandlePositionUpdate(uint16 opcode, MovementInfo const& mi);
 
+        // Periodic (timer-driven from Player::Update) re-validation of the player's
+        // current position — a second cadence that catches static exploits where no
+        // movement packets are sent (e.g. standing inside geometry).
+        void PeriodicCheck();
+
         // Called when the SERVER relocates the player (teleport ack, map change)
         // so the next client packet is trusted and the baseline is rebuilt
         // instead of being scored as an impossible jump.
@@ -60,6 +65,12 @@ class MovementAnticheat
         // Jump / fall state machine (infinite-jump + fall-damage-suppression).
         bool   m_airborne;     // in a jump/fall episode (no FALL_LAND yet)
         float  m_fallApexZ;    // highest Z reached during the current airborne episode
+
+        // Packet-burst + client-timestamp tracking.
+        uint32 m_burstWinStartMS;  // start of the current 1s burst-count window
+        uint32 m_burstCount;       // movement packets seen in the current window
+        uint32 m_lastClientTime;   // last MovementInfo client timestamp
+        bool   m_hasClientTime;
 };
 
 #endif // MANGOS_ANTICHEAT_MOVEMENTANTICHEAT_H

@@ -21,6 +21,8 @@ namespace
     const float  SPEED_SLACK_YD     = 2.0f;   // constant distance fudge per packet
     const uint32 GAP_RESET_MS       = 3000;   // packet gap implying load/teleport
     const float  FALL_SUPPRESS_YD   = 20.0f;  // drop beyond this should incur fall damage
+    const uint32 BURST_PER_SEC      = 50;     // movement packets/sec beyond this = burst
+    const uint32 CLIENT_TIME_BACK_MS = 500;   // client timestamp regression tolerance
 }
 
 MovementAnticheat::MovementAnticheat(Player* owner)
@@ -29,7 +31,8 @@ MovementAnticheat::MovementAnticheat(Player* owner)
       m_lastMS(0), m_lastFlags(0),
       m_hasValid(false), m_validX(0.f), m_validY(0.f), m_validZ(0.f), m_validO(0.f),
       m_hasTrace(false), m_traceX(0.f), m_traceY(0.f), m_traceZ(0.f),
-      m_airborne(false), m_fallApexZ(0.f)
+      m_airborne(false), m_fallApexZ(0.f),
+      m_burstWinStartMS(0), m_burstCount(0), m_lastClientTime(0), m_hasClientTime(false)
 {
 }
 
@@ -68,7 +71,43 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
         m_validX = pos->x; m_validY = pos->y; m_validZ = pos->z; m_validO = pos->o;
         m_airborne = (state == AC_MOVE_FALL);
         m_fallApexZ = pos->z;
+        m_hasClientTime = false;
+        m_burstWinStartMS = nowMS;
+        m_burstCount = 0;
         return;
+    }
+
+    // --- Detector: movement-packet burst (flood / timing manipulation) ---
+    if (getMSTimeDiff(m_burstWinStartMS, nowMS) >= 1000)
+    {
+        m_burstWinStartMS = nowMS;
+        m_burstCount = 0;
+    }
+    ++m_burstCount;
+    if (m_burstCount == BURST_PER_SEC + 1) // fire once when first exceeding the cap
+    {
+        AntiCheatContext bctx;
+        bctx.mapId = m_player->GetMapId();
+        bctx.x = pos->x; bctx.y = pos->y; bctx.z = pos->z;
+        bctx.latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
+        bctx.detail = "movement packet burst";
+        sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_BURST, 15.0f, bctx);
+    }
+
+    // --- Detector: client movement-timestamp regression ---
+    {
+        uint32 ct = mi.GetTime();
+        if (m_hasClientTime && m_lastClientTime > ct && (m_lastClientTime - ct) > CLIENT_TIME_BACK_MS)
+        {
+            AntiCheatContext tctx;
+            tctx.mapId = m_player->GetMapId();
+            tctx.x = pos->x; tctx.y = pos->y; tctx.z = pos->z;
+            tctx.latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
+            tctx.detail = "client timestamp regression";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PACKETTIMING, 10.0f, tctx);
+        }
+        m_lastClientTime = ct;
+        m_hasClientTime = true;
     }
 
     uint32 dtMS = getMSTimeDiff(m_lastMS, nowMS);
@@ -224,5 +263,30 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
             m_hasTrace = true;
             m_traceX = pos->x; m_traceY = pos->y; m_traceZ = pos->z;
         }
+    }
+}
+
+void MovementAnticheat::PeriodicCheck()
+{
+    if (!m_player || !m_player->IsInWorld())
+        return;
+    if (!sAntiCheatMgr->PhysicsEnabled() || sAntiCheatMgr->IsExempt(m_player))
+        return;
+
+    // Re-validate the player's current (idle) position against terrain — catches
+    // static exploits with no movement packets. Only the grounded case is judged.
+    AntiCheatMoveState state = NormalizeState(m_player->m_movementInfo);
+    if (state != AC_MOVE_GROUND)
+        return;
+
+    const char* reason = NULL;
+    if (PhysicsValidator::Validate(m_player, state, m_player->m_movementInfo, &reason) == AC_PHYS_IMPOSSIBLE)
+    {
+        AntiCheatContext ctx;
+        ctx.mapId = m_player->GetMapId();
+        ctx.x = m_player->GetPositionX(); ctx.y = m_player->GetPositionY(); ctx.z = m_player->GetPositionZ();
+        ctx.latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
+        ctx.detail = reason ? reason : "physics impossible (idle)";
+        sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 20.0f, ctx);
     }
 }

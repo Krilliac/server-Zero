@@ -536,6 +536,7 @@ Player::Player(WorldSession* session): Unit(), m_mover(this), m_camera(this), m_
 #endif
 
     m_movementAnticheat = NULL;
+    m_acPosTimer = 5000;
 
     m_transport = 0;
 
@@ -1578,6 +1579,21 @@ void Player::Update(uint32 update_diff, uint32 p_time)
     if (!IsInWorld())
     {
         return;
+    }
+
+    // Anti-Cheat: periodic idle-position re-validation (second cadence). Only if a
+    // movement validator exists (created on first movement); gating is inside.
+    if (m_movementAnticheat)
+    {
+        if (m_acPosTimer <= update_diff)
+        {
+            m_acPosTimer = 5000;
+            m_movementAnticheat->PeriodicCheck();
+        }
+        else
+        {
+            m_acPosTimer -= update_diff;
+        }
     }
 
     // Handle undelivered mail
