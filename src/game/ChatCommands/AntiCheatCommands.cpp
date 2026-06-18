@@ -76,7 +76,8 @@ bool ChatHandler::HandleAntiCheatWarnCommand(char* /*args*/)
     Player* target = getSelectedPlayer();
     if (!target)
     {
-        SendSysMessage("AntiCheat: select a player to warn.");
+        SendSysMessage(".anticheat warn FAILED: no player selected. Select/target an online "
+                       "player, then run .anticheat warn (sends them a warning).");
         SetSentErrorMessage(true);
         return false;
     }
@@ -93,7 +94,8 @@ bool ChatHandler::HandleAntiCheatJailCommand(char* /*args*/)
     Player* target = getSelectedPlayer();
     if (!target)
     {
-        SendSysMessage("AntiCheat: select an online player to jail.");
+        SendSysMessage(".anticheat jail FAILED: no player selected. Select/target an online "
+                       "player, then run .anticheat jail (teleports them to the configured jail).");
         SetSentErrorMessage(true);
         return false;
     }
@@ -117,7 +119,8 @@ bool ChatHandler::HandleAntiCheatUnjailCommand(char* /*args*/)
     Player* target = getSelectedPlayer();
     if (!target)
     {
-        SendSysMessage("AntiCheat: select an online player to release.");
+        SendSysMessage(".anticheat unjail FAILED: no player selected. Select/target an online "
+                       "player, then run .anticheat unjail (returns them to their homebind).");
         SetSentErrorMessage(true);
         return false;
     }
@@ -147,7 +150,8 @@ bool ChatHandler::HandleAntiCheatDeleteCommand(char* args)
 
     if (!guid)
     {
-        SendSysMessage("AntiCheat: select a player or pass a character name.");
+        SendSysMessage(".anticheat delete FAILED: no player. Select/target a player OR pass a "
+                       "character name (.anticheat delete <name>) to clear their violation records.");
         SetSentErrorMessage(true);
         return false;
     }

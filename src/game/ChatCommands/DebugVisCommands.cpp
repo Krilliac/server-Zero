@@ -62,7 +62,9 @@ bool ChatHandler::HandleDebugVisLosCommand(char* /*args*/)
     Unit* target = getSelectedUnit();
     if (!target)
     {
-        SendSysMessage("DebugVis: select a target unit first.");
+        SendSysMessage(".debug vis los FAILED: no target selected. It draws the line of sight "
+                       "from you to a unit (green = clear, red = blocked, with the hit point marked). "
+                       "Select/target a creature or player, then run .debug vis los again.");
         SetSentErrorMessage(true);
         return false;
     }
@@ -96,7 +98,9 @@ bool ChatHandler::HandleDebugVisPathCommand(char* /*args*/)
     Unit* target = getSelectedUnit();
     if (!target)
     {
-        SendSysMessage("DebugVis: select a target unit first.");
+        SendSysMessage(".debug vis path FAILED: no target selected. It draws the navmesh path "
+                       "from you to a unit (green = valid path, red = incomplete/none). "
+                       "Select/target a creature or player, then run .debug vis path again.");
         SetSentErrorMessage(true);
         return false;
     }
@@ -161,8 +165,11 @@ bool ChatHandler::HandleDebugVisualCommand(char* args)
         return false;
     if (!args || !*args)
     {
-        SendSysMessage("Usage: .debug visual <SpellVisualKit id> - plays a visual on you "
-                       "(nearby players see it). Try 243, 5001, 6700, 2950, 8734, 15533, 16794.");
+        // NOTE: SMSG_PLAY_SPELL_VISUAL takes a SpellVisualKit.dbc id (not SpellVisual).
+        // 179 is confirmed working (trainer learn-spell sparkle). Valid kit ids in the
+        // 1.12.1 client run 1..6757; good ones to try below.
+        SendSysMessage("Usage: .debug visual <SpellVisualKit id> (1-6757). Confirmed working: 179. "
+                       "Try also 224, 300, 451, 686, 1027, 5670.");
         SetSentErrorMessage(true);
         return false;
     }
