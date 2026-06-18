@@ -27,6 +27,8 @@ enum AntiCheatViolationType
     AC_VIOLATION_FALL            = 8,   // fall-damage suppression (big drop, no FALL_LAND)
     AC_VIOLATION_BURST           = 9,   // abnormal burst of movement packets (flood/timing)
     AC_VIOLATION_PACKETTIMING    = 10,  // client movement timestamp inconsistency
+    AC_VIOLATION_SPELL           = 11,  // cast of a spell the player does not have (injection)
+    AC_VIOLATION_ITEM            = 12,  // illegitimate item use (e.g. using an item in the trade window)
 
     AC_VIOLATION_MAX
 };

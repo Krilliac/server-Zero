@@ -47,6 +47,7 @@
 #include "Log.h"
 #include "Opcodes.h"
 #include "Spell.h"
+#include "AntiCheatMgr.h"
 #include "ScriptMgr.h"
 #include "Totem.h"
 #include "SpellAuras.h"
@@ -110,6 +111,17 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
     // not allow use item from trade (cheat way only)
     if (pItem->IsInTrade())
     {
+        // Anti-Cheat: using an item from the trade window is an exploit the core
+        // itself flags as "cheat way only".
+        if (sAntiCheatMgr->IsEnabled() && !sAntiCheatMgr->IsExempt(pUser))
+        {
+            AntiCheatContext ctx;
+            ctx.mapId = pUser->GetMapId();
+            ctx.x = pUser->GetPositionX(); ctx.y = pUser->GetPositionY(); ctx.z = pUser->GetPositionZ();
+            ctx.latency = pUser->GetSession() ? pUser->GetSession()->GetLatencyEWMA() : 0;
+            ctx.detail = "use of item in trade window";
+            sAntiCheatMgr->RecordViolation(pUser, AC_VIOLATION_ITEM, 30.0f, ctx);
+        }
         recvPacket.rpos(recvPacket.wpos());                 // prevent spam at not read packet tail
         pUser->SendEquipError(EQUIP_ERR_ITEM_NOT_FOUND, pItem, NULL);
         return;
@@ -362,11 +374,23 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
 
     if (mover->GetTypeId() == TYPEID_PLAYER)
     {
+        Player* plMover = (Player*)mover;
+        bool hasSpell = plMover->HasActiveSpell(spellId);
         // not have spell in spellbook or spell passive and not casted by client
-        if (!((Player*)mover)->HasActiveSpell(spellId) || IsPassiveSpell(spellInfo))
+        if (!hasSpell || IsPassiveSpell(spellInfo))
         {
             sLog.outError("World: Player %u casts spell %u which he shouldn't have", mover->GetGUIDLow(), spellId);
-            // cheater? kick? ban?
+            // Anti-Cheat: casting a spell not in the spellbook is spell-ID injection
+            // (the passive-spell case is excluded to avoid false positives).
+            if (!hasSpell && sAntiCheatMgr->IsEnabled() && !sAntiCheatMgr->IsExempt(plMover))
+            {
+                AntiCheatContext ctx;
+                ctx.mapId = plMover->GetMapId();
+                ctx.x = plMover->GetPositionX(); ctx.y = plMover->GetPositionY(); ctx.z = plMover->GetPositionZ();
+                ctx.latency = plMover->GetSession() ? plMover->GetSession()->GetLatencyEWMA() : 0;
+                ctx.detail = "cast of unknown spell (injection)";
+                sAntiCheatMgr->RecordViolation(plMover, AC_VIOLATION_SPELL, 40.0f, ctx);
+            }
             recvPacket.rpos(recvPacket.wpos());             // prevent spam at ignore packet
             return;
         }
