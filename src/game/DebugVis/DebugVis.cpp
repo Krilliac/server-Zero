@@ -17,29 +17,34 @@
 namespace
 {
     // Per-category marker MODEL/COLOUR (a GameObjectDisplayInfo.dbc display id),
-    // applied per-instance via GAMEOBJECT_DISPLAYID. Two presets selectable with
-    // DebugVis.Style (0 = colour-coded light beams [default], 1 = floating
-    // crystals); any single category is overridable via DebugVis.Disp.<Cat>.
+    // applied per-instance via GAMEOBJECT_DISPLAYID.
+    //
+    // IMPORTANT: the client only lets you mouse-over/hover a gameobject whose
+    // *model* is a solid clickable mesh. Particle/effect doodads (light columns,
+    // auras, ground reticles) render but are NOT hoverable, so their per-instance
+    // tooltip never shows. Both presets below therefore use solid crystal models.
+    //   DebugVis.Style 0 = colour-coded Power Crystals [default], 1 = assorted
+    //   floating crystals. Any single category is overridable via DebugVis.Disp.<Cat>.
     uint32 ColorDisplayId(DebugVis::Category cat)
     {
-        const bool crystals = sConfig.GetIntDefault("DebugVis.Style", 0) != 0;
+        const bool alt = sConfig.GetIntDefault("DebugVis.Style", 0) != 0;
 
-        // {beam, crystal} display ids per category.
-        uint32 beam, crystal; const char* key;
+        // {primary (power crystals, clean palette), alternate (assorted crystals)}.
+        uint32 prim, alt2; const char* key;
         switch (cat)
         {
-            case DebugVis::DV_CELL:      key = "DebugVis.Disp.Cell";      beam = 263;  crystal = 5811; break; // blue   / dark crystal
-            case DebugVis::DV_LOS_OK:    key = "DebugVis.Disp.LosOk";     beam = 3993; crystal = 6431; break; // green  / glyphed crystal
-            case DebugVis::DV_LOS_BLOCK: key = "DebugVis.Disp.LosBlock";  beam = 327;  crystal = 6573; break; // red    / red crystal
-            case DebugVis::DV_PATH:      key = "DebugVis.Disp.Path";      beam = 3993; crystal = 6431; break; // green  / glyphed crystal
-            case DebugVis::DV_PATH_BAD:  key = "DebugVis.Disp.PathBad";   beam = 327;  crystal = 6573; break; // red    / red crystal
-            case DebugVis::DV_COLLISION: key = "DebugVis.Disp.Collision"; beam = 363;  crystal = 1667; break; // purple / purple crystal
-            case DebugVis::DV_HEIGHT:    key = "DebugVis.Disp.Height";    beam = 266;  crystal = 6570; break; // yellow / silithus crystal
-            case DebugVis::DV_HITPOINT:  key = "DebugVis.Disp.HitPoint";  beam = 6430; crystal = 6571; break; // cannon target reticle / broken red crystal
+            case DebugVis::DV_CELL:      key = "DebugVis.Disp.Cell";      prim = 2971; alt2 = 5811; break; // blue   power crystal / dark crystal
+            case DebugVis::DV_LOS_OK:    key = "DebugVis.Disp.LosOk";     prim = 2972; alt2 = 6431; break; // green  power crystal / glyphed crystal
+            case DebugVis::DV_LOS_BLOCK: key = "DebugVis.Disp.LosBlock";  prim = 2973; alt2 = 6573; break; // red    power crystal / red crystal
+            case DebugVis::DV_PATH:      key = "DebugVis.Disp.Path";      prim = 2972; alt2 = 6431; break; // green  power crystal / glyphed crystal
+            case DebugVis::DV_PATH_BAD:  key = "DebugVis.Disp.PathBad";   prim = 2973; alt2 = 6573; break; // red    power crystal / red crystal
+            case DebugVis::DV_COLLISION: key = "DebugVis.Disp.Collision"; prim = 1667; alt2 = 1667; break; // purple floating crystal
+            case DebugVis::DV_HEIGHT:    key = "DebugVis.Disp.Height";    prim = 2974; alt2 = 6570; break; // yellow power crystal / silithus crystal
+            case DebugVis::DV_HITPOINT:  key = "DebugVis.Disp.HitPoint";  prim = 5746; alt2 = 6571; break; // crimson shard / broken red crystal
             case DebugVis::DV_GENERIC:
-            default:                     key = "DebugVis.Disp.Generic";   beam = 6679; crystal = 5746; break; // glowing circle / crimson shard
+            default:                     key = "DebugVis.Disp.Generic";   prim = 5811; alt2 = 5746; break; // dark crystal / crimson shard
         }
-        return uint32(sConfig.GetIntDefault(key, int32(crystals ? crystal : beam)));
+        return uint32(sConfig.GetIntDefault(key, int32(alt ? alt2 : prim)));
     }
 
     // entry -> per-instance tooltip text for spawned pool markers. Touched only
