@@ -2833,6 +2833,25 @@ Creature* Player::GetNPCIfCanInteractWith(ObjectGuid guid, uint32 npcflagmask)
     // not too far
     if (!unit->IsWithinDistInMap(this, INTERACTION_DISTANCE))
     {
+        // Anti-Cheat: the core already blocks this interaction; a request to talk to
+        // an NPC well beyond interaction range (vendor/gossip/trainer/banker/...) is
+        // a remote-interaction attempt worth attributing. Score only, generous slack
+        // vs latency so a player who just walked up isn't flagged. Additive: turning
+        // the AC off changes nothing here except whether the attempt is tracked.
+        if (sAntiCheatMgr->IsEnabled() && !sAntiCheatMgr->IsExempt(this))
+        {
+            uint32 lat = GetSession() ? GetSession()->GetLatencyEWMA() : 0;
+            float slack = INTERACTION_DISTANCE + 8.0f + GetSpeed(MOVE_RUN) * (float(lat) / 1000.0f);
+            if (GetDistance(unit) > slack)
+            {
+                AntiCheatContext ctx;
+                ctx.mapId = GetMapId();
+                ctx.x = GetPositionX(); ctx.y = GetPositionY(); ctx.z = GetPositionZ();
+                ctx.latency = lat;
+                ctx.detail = "npc interaction beyond range";
+                sAntiCheatMgr->RecordViolation(this, AC_VIOLATION_INTERACT, 15.0f, ctx);
+            }
+        }
         return NULL;
     }
 
