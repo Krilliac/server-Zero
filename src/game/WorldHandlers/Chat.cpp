@@ -255,6 +255,7 @@ ChatCommand* ChatHandler::getCommandTable()
     static ChatCommand anticheatCommandTable[] =
     {
         { "status",         SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatStatusCommand,          "", NULL },
+        { "top",            SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatTopCommand,             "", NULL },
         { "report",         SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatReportCommand,          "", NULL },
         { "reload",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatReloadCommand,          "", NULL },
         { "warn",           SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatWarnCommand,            "", NULL },

@@ -91,6 +91,10 @@ class AntiCheatMgr
         // GM review: append a human-readable status line for target (or all).
         void BuildStatus(Player* target, std::string& out);
 
+        // GM triage: the highest live (decayed) scores, sorted desc, as
+        // (characterLowGuid, score) pairs, capped at `limit`.
+        void GetTopScores(uint32 limit, std::vector<std::pair<uint32, float> >& out);
+
         // Config getters (cached snapshot).
         uint32 GetSpeedTolerancePct() const { return m_speedTolerancePct; }
         uint32 GetTeleportDistance()  const { return m_teleportDistance; }

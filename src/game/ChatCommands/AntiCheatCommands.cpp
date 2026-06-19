@@ -8,6 +8,7 @@
 #include "Player.h"
 #include "World.h"
 #include "ObjectMgr.h"
+#include "ObjectAccessor.h"
 #include "Log.h"
 #include "Config/Config.h"
 #include "Database/DatabaseEnv.h"
@@ -15,6 +16,8 @@
 #include <cstring>
 #include <cctype>
 #include <cstdlib>
+#include <vector>
+#include <utility>
 
 bool ChatHandler::HandleAntiCheatStatusCommand(char* /*args*/)
 {
@@ -66,6 +69,34 @@ bool ChatHandler::HandleAntiCheatReportCommand(char* /*args*/)
     }
     while (result->NextRow());
     delete result;
+    return true;
+}
+
+bool ChatHandler::HandleAntiCheatTopCommand(char* args)
+{
+    uint32 limit = 10;
+    if (char* tok = strtok(args, " "))
+    {
+        int n = atoi(tok);
+        if (n > 0) limit = uint32(n);
+    }
+    if (limit > 50) limit = 50;
+
+    std::vector<std::pair<uint32, float> > top;
+    sAntiCheatMgr->GetTopScores(limit, top);
+    if (top.empty())
+    {
+        SendSysMessage("AntiCheat: no players currently carry a live violation score.");
+        return true;
+    }
+
+    PSendSysMessage("AntiCheat: top %u by live score:", uint32(top.size()));
+    for (size_t i = 0; i < top.size(); ++i)
+    {
+        Player* p = sObjectAccessor.FindPlayer(ObjectGuid(HIGHGUID_PLAYER, top[i].first));
+        PSendSysMessage("  %2u. %s (guid %u): %.0f",
+                        uint32(i + 1), p ? p->GetName() : "<offline>", top[i].first, top[i].second);
+    }
     return true;
 }
 
@@ -300,7 +331,7 @@ bool ChatHandler::HandleSpoofCommand(char* args)
     if (!tok || kind == "list" || kind == "help")
     {
         SendSysMessage("Spoof simulator (live anti-cheat test + GM tooling). Usage:");
-        SendSysMessage("  .spoof <kind> [magnitude]   - run the cheat's signature through the detectors");
+        SendSysMessage("  .spoof <kind>|all [magnitude] - run a cheat signature (or all) through detectors");
         std::string line = "  kinds: ";
         for (uint32 i = 0; i < kindCount; ++i) { line += kinds[i]; if (i + 1 < kindCount) line += ", "; }
         SendSysMessage(line.c_str());
@@ -327,6 +358,20 @@ bool ChatHandler::HandleSpoofCommand(char* args)
     // Drive the real detectors and force the result to apply (target may be an
     // exempt GM, and AC may be off). Bypass is set only around this synchronous call.
     std::string desc;
+    if (kind == "all")
+    {
+        sAntiCheatMgr->SetTestBypass(true);
+        for (uint32 i = 0; i < kindCount; ++i)
+            target->GetMovementAnticheat()->SimulateCheat(kinds[i], mag, desc);
+        sAntiCheatMgr->SetTestBypass(false);
+        PSendSysMessage("Spoof: ran all %u cheat signatures on %s. Detector result below:",
+                        kindCount, target->GetName());
+        std::string allst;
+        sAntiCheatMgr->BuildStatus(target, allst);
+        SendSysMessage(allst.c_str());
+        return true;
+    }
+
     sAntiCheatMgr->SetTestBypass(true);
     bool ok = target->GetMovementAnticheat()->SimulateCheat(kind, mag, desc);
     sAntiCheatMgr->SetTestBypass(false);

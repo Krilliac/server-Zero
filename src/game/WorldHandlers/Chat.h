@@ -255,6 +255,7 @@ class ChatHandler
 
         // Anti-Cheat framework commands
         bool HandleAntiCheatStatusCommand(char* args);
+        bool HandleAntiCheatTopCommand(char* args);
         bool HandleAntiCheatReportCommand(char* args);
         bool HandleAntiCheatReloadCommand(char* args);
         bool HandleAntiCheatWarnCommand(char* args);

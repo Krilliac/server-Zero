@@ -13,6 +13,7 @@
 #include "Database/DatabaseEnv.h"
 
 #include <cstdio>
+#include <algorithm>
 
 AntiCheatMgr::AntiCheatMgr()
     : m_enabled(false), m_testBypass(false), m_movementEnabled(false), m_physicsEnabled(false),
@@ -147,6 +148,27 @@ void AntiCheatMgr::DoRecord(Player* player, AntiCheatViolationType type,
     DebugVisualizer::Mark(player, type, ctx.x, ctx.y, ctx.z);
 
     Apply(player, score, type, ctx);
+}
+
+void AntiCheatMgr::GetTopScores(uint32 limit, std::vector<std::pair<uint32, float> >& out)
+{
+    uint32 nowMS = getMSTime();
+    std::vector<std::pair<uint32, float> > all;
+    {
+        std::lock_guard<std::mutex> guard(m_lock);
+        for (std::map<uint32, ScoreState>::iterator it = m_scores.begin(); it != m_scores.end(); ++it)
+        {
+            float s = DecayedScore(it->second, nowMS);
+            if (s > 0.0f)
+                all.push_back(std::make_pair(it->first, s));
+        }
+    }
+    std::sort(all.begin(), all.end(),
+              [](std::pair<uint32, float> const& a, std::pair<uint32, float> const& b)
+              { return a.second > b.second; });
+    if (all.size() > limit)
+        all.resize(limit);
+    out.swap(all);
 }
 
 void AntiCheatMgr::SetScore(Player* player, float score)
