@@ -47,6 +47,29 @@ namespace
         return uint32(sConfig.GetIntDefault(key, int32(alt ? alt2 : prim)));
     }
 
+    // Optional GLOW companion model spawned alongside each clickable crystal: a
+    // colour-matched particle effect (light column / glow circle) for the
+    // "engine debug-draw" look. Effect models aren't clickable, which is fine —
+    // the co-located crystal is the hover target. 0 disables a category's glow.
+    uint32 GlowDisplayId(DebugVis::Category cat)
+    {
+        uint32 def; const char* key;
+        switch (cat)
+        {
+            case DebugVis::DV_CELL:      key = "DebugVis.GlowDisp.Cell";      def = 263;  break; // blue column
+            case DebugVis::DV_LOS_OK:    key = "DebugVis.GlowDisp.LosOk";     def = 3993; break; // green column
+            case DebugVis::DV_LOS_BLOCK: key = "DebugVis.GlowDisp.LosBlock";  def = 327;  break; // red
+            case DebugVis::DV_PATH:      key = "DebugVis.GlowDisp.Path";      def = 3993; break; // green column
+            case DebugVis::DV_PATH_BAD:  key = "DebugVis.GlowDisp.PathBad";   def = 327;  break; // red
+            case DebugVis::DV_COLLISION: key = "DebugVis.GlowDisp.Collision"; def = 363;  break; // purple column
+            case DebugVis::DV_HEIGHT:    key = "DebugVis.GlowDisp.Height";    def = 266;  break; // yellow column
+            case DebugVis::DV_HITPOINT:  key = "DebugVis.GlowDisp.HitPoint";  def = 6430; break; // cannon target reticle
+            case DebugVis::DV_GENERIC:
+            default:                     key = "DebugVis.GlowDisp.Generic";   def = 6679; break; // glow circle
+        }
+        return uint32(sConfig.GetIntDefault(key, int32(def)));
+    }
+
     // entry -> per-instance tooltip text for spawned pool markers. Touched only
     // from the world/session thread (command handlers + GO-query handler), so no
     // locking needed. Bounded to the pool size (ring reuse overwrites).
@@ -111,19 +134,35 @@ namespace DebugVis
         if (!viewer || !viewer->IsInWorld())
             return false;
 
-        // Labeled markers each take a distinct pool entry (per-instance tooltip);
-        // unlabeled ones share a single entry (the tooltip is irrelevant for them).
-        uint32 entry = label.empty() ? SharedFillEntry() : NextLabeledEntry(label);
         uint32 despawnMs = DespawnSeconds() * IN_MILLISECONDS;
+        float ori = viewer->GetOrientation();
+        ObjectGuid owner = viewer->GetObjectGuid();
+        bool placed = false;
 
-        // Colour/model is forced per-instance, independent of the pool template.
-        GameObject* go = viewer->SummonGameObject(entry, x, y, z, viewer->GetOrientation(),
-                                                  despawnMs, ColorDisplayId(cat));
-        if (!go)
-            return false;
+        // Optional colour-matched glow effect co-located with the crystal, for the
+        // "debug-draw" look. Effect model => not clickable (that's the crystal's
+        // job), so it shares the fill entry and carries no tooltip.
+        if (sConfig.GetIntDefault("DebugVis.Glow", 1))
+        {
+            uint32 glow = GlowDisplayId(cat);
+            if (glow)
+                if (GameObject* g = viewer->SummonGameObject(SharedFillEntry(), x, y, z, ori, despawnMs, glow))
+                {
+                    MarkerOwners()[owner].push_back(g->GetObjectGuid());
+                    placed = true;
+                }
+        }
 
-        MarkerOwners()[viewer->GetObjectGuid()].push_back(go->GetObjectGuid());
-        return true;
+        // Clickable crystal — the hover target. Labeled markers each take a distinct
+        // pool entry (per-instance tooltip); unlabeled ones share a single entry.
+        uint32 entry = label.empty() ? SharedFillEntry() : NextLabeledEntry(label);
+        if (GameObject* go = viewer->SummonGameObject(entry, x, y, z, ori, despawnMs, ColorDisplayId(cat)))
+        {
+            MarkerOwners()[owner].push_back(go->GetObjectGuid());
+            placed = true;
+        }
+
+        return placed;
     }
 
     uint32 Clear(Player* viewer)
