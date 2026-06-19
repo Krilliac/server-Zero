@@ -10,6 +10,7 @@
 #include "Player.h"
 #include "World.h"
 #include "Unit.h"
+#include "SpellAuraDefines.h"
 #include "Opcodes.h"
 #include "Timer.h"
 #include "Log.h"
@@ -172,6 +173,47 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
         cheapTrip = true;
     }
 
+    // --- Detectors: movement-flag spoofing (the client asserts a capability flag
+    // it has no aura/state to back). Aura-gated to avoid false positives; only for
+    // the living player. ---
+    if (m_player->IsAlive())
+    {
+        if (mi.HasMovementFlag(MOVEFLAG_WATERWALKING) && !m_player->HasAuraType(SPELL_AURA_WATER_WALK))
+        {
+            ctx.detail = "water-walk flag without aura";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_FLAG_CONTRADICT, 25.0f, ctx);
+            cheapTrip = true;
+        }
+        if (mi.HasMovementFlag(MOVEFLAG_HOVER) && !m_player->HasAuraType(SPELL_AURA_HOVER))
+        {
+            ctx.detail = "hover flag without aura";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_FLAG_CONTRADICT, 25.0f, ctx);
+            cheapTrip = true;
+        }
+        // Rogue "Safe Fall" is a class passive (no feather-fall aura) — excluded.
+        if (mi.HasMovementFlag(MOVEFLAG_SAFE_FALL) && !m_player->HasAuraType(SPELL_AURA_FEATHER_FALL) &&
+            m_player->getClass() != CLASS_ROGUE)
+        {
+            ctx.detail = "slow-fall flag without aura";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_FLAG_CONTRADICT, 15.0f, ctx);
+        }
+    }
+
+    // --- Detector: transport-flag spoof (claims ONTRANSPORT with no transport) —
+    // closes the bypass where the speed/teleport detectors skip transport state. ---
+    if (state == AC_MOVE_TRANSPORT && !m_player->GetTransport())
+    {
+        ctx.detail = "transport flag without transport (bypass)";
+        sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_FLAG_CONTRADICT, 20.0f, ctx);
+    }
+
+    // --- Detector: swim-flag spoof (swimming while not in liquid) ---
+    if (state == AC_MOVE_SWIM && !m_player->IsInWater())
+    {
+        ctx.detail = "swim flag while not in water";
+        sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_FLAG_CONTRADICT, 20.0f, ctx);
+    }
+
     // --- Detector: teleport / blink (single-packet displacement) ---
     float teleMax = float(sAntiCheatMgr->GetTeleportDistance())
                   + allowed * (float(latency) / 1000.0f);
@@ -197,6 +239,18 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
             sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_SPEED, weight, ctx);
             cheapTrip = true;
         }
+    }
+
+    // --- Detector: movement while rooted (root-break) ---
+    // A rooted unit may turn/jump in place but never translate horizontally. A
+    // clear horizontal step while UNIT_STAT_ROOT is set is a root-break hack.
+    // Restricted to grounded, non-flagged packets to exclude knockback/transport.
+    if (state == AC_MOVE_GROUND && horiz > 3.0f && !cheapTrip &&
+        m_player->hasUnitState(UNIT_STAT_ROOT))
+    {
+        ctx.detail = "horizontal movement while rooted";
+        sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 20.0f, ctx);
+        cheapTrip = true;
     }
 
     // --- Detector: time-sync divergence (client vs server elapsed time) ---
