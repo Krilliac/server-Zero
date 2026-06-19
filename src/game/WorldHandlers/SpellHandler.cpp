@@ -48,6 +48,7 @@
 #include "Opcodes.h"
 #include "Spell.h"
 #include "AntiCheatMgr.h"
+#include "MovementAnticheat.h"
 #include "ScriptMgr.h"
 #include "Totem.h"
 #include "SpellAuras.h"
@@ -404,6 +405,15 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
             recvPacket.rpos(recvPacket.wpos());             // prevent spam at ignore packet
             return;
         }
+    }
+
+    // Anti-Cheat: spell-cast timing (GCD bypass + cast spam). Only validated casts
+    // (known, non-passive) reach here. Time-based vector akin to the move detectors.
+    if (mover->GetTypeId() == TYPEID_PLAYER && sAntiCheatMgr->MovementEnabled() &&
+        !sAntiCheatMgr->IsExempt((Player*)mover))
+    {
+        ((Player*)mover)->GetMovementAnticheat()->NotifySpellCast(
+            spellId, GetSpellCastTime(spellInfo), spellInfo->StartRecoveryTime);
     }
 
     // client provided targets

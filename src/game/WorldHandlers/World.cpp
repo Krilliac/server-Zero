@@ -947,6 +947,8 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_UINT32_ANTICHEAT_SCORE_RUBBER, "AntiCheat.Score.Rubberband", 60);
     setConfig(CONFIG_UINT32_ANTICHEAT_SCORE_KICK,   "AntiCheat.Score.Kick", 120);
     setConfigMinMax(CONFIG_UINT32_ANTICHEAT_DECAY,  "AntiCheat.Score.DecayPerSec", 2, 0, 100);
+    // Spell-cast timing: more than this many cast requests per second = cast spam.
+    setConfigMinMax(CONFIG_UINT32_ANTICHEAT_CAST_BURST, "AntiCheat.CastBurstPerSec", 8, 2, 100);
     setConfig(CONFIG_BOOL_TIMESYNC_ENABLE,          "TimeSync.Enable", true);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_ALPHA,   "TimeSync.EWMA.Alpha", 20, 1, 100);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_DESYNC,  "TimeSync.Desync.Threshold", 1000, 100, 60000);

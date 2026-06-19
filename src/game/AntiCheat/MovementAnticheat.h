@@ -50,6 +50,16 @@ class MovementAnticheat
         // (oversized / spammed skips are a time-based speed/teleport-mask vector).
         void NotifyClientTimeSkip(uint32 skippedMs);
 
+        // Time-based anti-cheat for the spell-cast path (CMSG_CAST_SPELL): detects
+        // GCD bypass (casts closer together than the spell's global cooldown allows)
+        // and cast spam. castTimeMs/gcdMs come from the spell entry.
+        void NotifySpellCast(uint32 spellId, uint32 castTimeMs, uint32 gcdMs);
+
+        // Time-based anti-cheat for movement ACK packets (force-speed-change,
+        // water-walk): flags client-timestamp regression in the ack (manipulated
+        // ack timing) and folds the sample into the clock-offset service.
+        void NotifyMoveAckTime(uint32 clientTime);
+
         // Last position that passed the teleport/physics gates (rubberband target
         // for the enforcement slice). Valid only if HasValid() is true.
         bool HasValid() const { return m_hasValid; }
@@ -99,6 +109,18 @@ class MovementAnticheat
         uint32 m_skipWinStartMS;
         uint32 m_skipCount;
         uint32 m_skipAccumMs;
+
+        // Spell-cast timing (GCD bypass + cast spam).
+        bool   m_hasLastCast;
+        uint32 m_lastCastMS;
+        uint32 m_lastCastGcd;
+        uint32 m_castWinStartMS;
+        uint32 m_castCount;
+
+        // Movement-ACK client-timestamp tracking (kept separate from the movement
+        // path's m_lastClientTime so it can't skew the per-packet desync delta).
+        bool   m_hasAckTime;
+        uint32 m_lastAckTime;
 };
 
 #endif // MANGOS_ANTICHEAT_MOVEMENTANTICHEAT_H

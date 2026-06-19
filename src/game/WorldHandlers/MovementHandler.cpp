@@ -435,6 +435,10 @@ void WorldSession::HandleForceSpeedChangeAckOpcodes(WorldPacket& recv_data)
         return;
     }
 
+    // Anti-Cheat: validate the ACK's client timestamp (regression = manipulated clock).
+    if (sAntiCheatMgr->MovementEnabled() && !sAntiCheatMgr->IsExempt(_player))
+        _player->GetMovementAnticheat()->NotifyMoveAckTime(movementInfo.GetTime());
+
     // client ACK send one packet for mounted/run case and need skip all except last from its
     // in other cases anti-cheat check can be fail in false case
     UnitMoveType move_type;
@@ -648,6 +652,10 @@ void WorldSession::HandleMoveWaterWalkAck(WorldPacket& recv_data)
     recv_data.read_skip<uint32>();                          // unk
     recv_data >> movementInfo;
     recv_data >> Unused<uint32>();                          // unk2
+
+    // Anti-Cheat: validate the ACK's client timestamp (regression = manipulated clock).
+    if (sAntiCheatMgr->MovementEnabled() && !sAntiCheatMgr->IsExempt(_player))
+        _player->GetMovementAnticheat()->NotifyMoveAckTime(movementInfo.GetTime());
 }
 
 /**

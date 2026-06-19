@@ -26,6 +26,8 @@ namespace
     const uint32 CLIENT_TIME_BACK_MS = 500;   // client timestamp regression tolerance
     const uint32 SKIP_WINDOW_MS      = 10000;  // move-time-skip abuse counting window
     const uint32 SKIP_MAX_PER_WINDOW = 10;     // legit clients rarely skip this often
+    const uint32 CAST_WINDOW_MS      = 1000;   // cast-spam counting window
+    const uint32 CAST_GCD_SLACK_MS   = 150;    // tolerance below GCD on top of latency
 }
 
 MovementAnticheat::MovementAnticheat(Player* owner)
@@ -38,7 +40,10 @@ MovementAnticheat::MovementAnticheat(Player* owner)
       m_burstWinStartMS(0), m_burstCount(0), m_lastClientTime(0), m_hasClientTime(false),
       m_hasClockOffset(false), m_clockOffsetMs(0),
       m_timeSkipGraceUntilMS(0), m_desyncStreak(0), m_lastResyncMS(0),
-      m_skipWinStartMS(0), m_skipCount(0), m_skipAccumMs(0)
+      m_skipWinStartMS(0), m_skipCount(0), m_skipAccumMs(0),
+      m_hasLastCast(false), m_lastCastMS(0), m_lastCastGcd(0),
+      m_castWinStartMS(0), m_castCount(0),
+      m_hasAckTime(false), m_lastAckTime(0)
 {
 }
 
@@ -428,4 +433,81 @@ void MovementAnticheat::NotifyClientTimeSkip(uint32 skippedMs)
     m_hasClockOffset = false;   // re-seed offset from the new client timebase
     m_hasClientTime  = false;   // re-seed the client-timestamp baseline
     m_trustNext      = true;    // the skip itself moves nothing; trust the next packet
+}
+
+void MovementAnticheat::NotifySpellCast(uint32 /*spellId*/, uint32 /*castTimeMs*/, uint32 gcdMs)
+{
+    if (!m_player || !sAntiCheatMgr->MovementEnabled() || sAntiCheatMgr->IsExempt(m_player))
+        return;
+
+    uint32 now = getMSTime();
+    uint32 latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
+
+    AntiCheatContext ctx;
+    ctx.mapId = m_player->GetMapId();
+    ctx.x = m_player->GetPositionX(); ctx.y = m_player->GetPositionY(); ctx.z = m_player->GetPositionZ();
+    ctx.latency = latency;
+
+    // --- Detector: cast spam (too many cast requests per second) ---
+    if (m_castWinStartMS == 0 || now - m_castWinStartMS > CAST_WINDOW_MS)
+    {
+        m_castWinStartMS = now;
+        m_castCount = 0;
+    }
+    ++m_castCount;
+    if (m_castCount > sWorld.getConfig(CONFIG_UINT32_ANTICHEAT_CAST_BURST))
+    {
+        ctx.detail = "spell cast spam";
+        sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_SPELL, 12.0f, ctx);
+    }
+
+    // --- Detector: GCD bypass (two GCD-triggering casts closer than the global
+    // cooldown, minus latency + slack, allows) — a cast-speed / no-GCD hack. ---
+    if (m_hasLastCast && gcdMs > 0 && m_lastCastGcd > 0)
+    {
+        uint32 interval = now - m_lastCastMS;
+        uint32 floorMs = (m_lastCastGcd > latency + CAST_GCD_SLACK_MS)
+                       ? m_lastCastGcd - latency - CAST_GCD_SLACK_MS : 0;
+        if (floorMs > 0 && interval < floorMs)
+        {
+            float ratio = float(floorMs - interval) / float(floorMs);   // 0..1
+            float weight = 8.0f + ratio * 17.0f;                        // 8..25
+            ctx.detail = "cast faster than GCD (cast-speed hack)";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_SPELL, weight, ctx);
+        }
+    }
+
+    m_hasLastCast = true;
+    m_lastCastMS = now;
+    m_lastCastGcd = gcdMs;
+}
+
+void MovementAnticheat::NotifyMoveAckTime(uint32 clientTime)
+{
+    if (!m_player || !sAntiCheatMgr->MovementEnabled() || sAntiCheatMgr->IsExempt(m_player))
+        return;
+
+    uint32 now = getMSTime();
+
+    // Timestamp regression in an ACK means a manipulated client clock. Suppressed
+    // during the grace window after a legitimate reported time skip.
+    if (m_hasAckTime && m_lastAckTime > clientTime &&
+        (m_lastAckTime - clientTime) > CLIENT_TIME_BACK_MS &&
+        now >= m_timeSkipGraceUntilMS)
+    {
+        AntiCheatContext ctx;
+        ctx.mapId = m_player->GetMapId();
+        ctx.x = m_player->GetPositionX(); ctx.y = m_player->GetPositionY(); ctx.z = m_player->GetPositionZ();
+        ctx.latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
+        ctx.detail = "ack client timestamp regression";
+        sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PACKETTIMING, 10.0f, ctx);
+    }
+    m_lastAckTime = clientTime;
+    m_hasAckTime = true;
+
+    // Fold the ack sample into the clock-offset service (independent of the
+    // movement per-packet delta, so it can't cause a false desync).
+    int64 sampleOffset = int64(now) - int64(clientTime);
+    if (!m_hasClockOffset) { m_clockOffsetMs = sampleOffset; m_hasClockOffset = true; }
+    else { m_clockOffsetMs = (sampleOffset * 20 + m_clockOffsetMs * 80) / 100; }
 }
