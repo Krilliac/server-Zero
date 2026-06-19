@@ -31,6 +31,25 @@ namespace
     const uint32 CAST_WINDOW_MS      = 1000;   // cast-spam counting window
     const uint32 CAST_GCD_SLACK_MS   = 150;    // tolerance below GCD on top of latency
     const float  NOCLIP_MIN_STEP     = 4.0f;   // min ground step (yd) to run the LoS no-clip test
+
+    // Active locomotion-START opcodes — illegal to issue while rooted/stunned (a
+    // legit client suppresses them in that state). Stop/heartbeat/turn opcodes are
+    // allowed (turning in place is fine while rooted).
+    bool IsActiveMoveStart(uint16 op)
+    {
+        switch (op)
+        {
+            case MSG_MOVE_START_FORWARD:
+            case MSG_MOVE_START_BACKWARD:
+            case MSG_MOVE_START_STRAFE_LEFT:
+            case MSG_MOVE_START_STRAFE_RIGHT:
+            case MSG_MOVE_START_SWIM:
+            case MSG_MOVE_JUMP:
+                return true;
+            default:
+                return false;
+        }
+    }
 }
 
 MovementAnticheat::MovementAnticheat(Player* owner)
@@ -46,7 +65,8 @@ MovementAnticheat::MovementAnticheat(Player* owner)
       m_skipWinStartMS(0), m_skipCount(0), m_skipAccumMs(0),
       m_hasLastCast(false), m_lastCastMS(0), m_lastCastGcd(0),
       m_castWinStartMS(0), m_castCount(0),
-      m_hasAckTime(false), m_lastAckTime(0)
+      m_hasAckTime(false), m_lastAckTime(0),
+      m_hasKin(false), m_lastSpeed(0.f)
 {
 }
 
@@ -243,6 +263,40 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
         }
     }
 
+    // --- Detector: acceleration / velocity-delta gate (config-gated, OFF by
+    // default — FP-prone). Catches a sudden implausible speed increase to a real
+    // speed within one packet (instant 0->fast stutter / oscillating speedhacks
+    // that average legitimately) that the steady-state speed check misses. Only on
+    // ground, not after teleport, not when another detector already tripped. ---
+    if (sWorld.getConfig(CONFIG_BOOL_ANTICHEAT_ACCEL_CHECK) && m_hasKin && !cheapTrip &&
+        !m_trustNext && state == AC_MOVE_GROUND && allowed > 0.0f)
+    {
+        float dv = ctx.speed - m_lastSpeed;            // accelerating only
+        if (dv > 0.0f)
+        {
+            float accel = dv / dtSec;
+            float cap = allowed * float(sWorld.getConfig(CONFIG_UINT32_ANTICHEAT_ACCEL_MULT));
+            if (accel > cap && ctx.speed > allowed * 0.5f)
+            {
+                float ratio = accel / (cap > 0.01f ? cap : 0.01f);
+                float weight = (ratio - 1.0f) * 20.0f;
+                if (weight < 5.0f)  weight = 5.0f;
+                if (weight > 25.0f) weight = 25.0f;
+                ctx.detail = "implausible acceleration (velocity delta)";
+                sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_SPEED, weight, ctx);
+            }
+        }
+    }
+
+    // --- Detector: opcode legality by state — an active locomotion-START command
+    // issued while the player cannot move (rooted/stunned) is illegal; a legit
+    // client never sends one in that state. ---
+    if (IsActiveMoveStart(opcode) && m_player->hasUnitState(UNIT_STAT_ROOT | UNIT_STAT_STUNNED))
+    {
+        ctx.detail = "move-start opcode while rooted/stunned";
+        sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 15.0f, ctx);
+    }
+
     // --- Detector: movement while rooted (root-break) ---
     // A rooted unit may turn/jump in place but never translate horizontally. A
     // clear horizontal step while UNIT_STAT_ROOT is set is a root-break hack.
@@ -382,6 +436,7 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
     // in the enforcement slice (a non-teleport, non-impossible packet).
     m_lastX = pos->x; m_lastY = pos->y; m_lastZ = pos->z; m_lastO = pos->o;
     m_lastMS = nowMS; m_lastFlags = mi.GetMovementFlags();
+    m_lastSpeed = ctx.speed; m_hasKin = true;   // for the acceleration gate
     if (!cheapTrip)
     {
         m_hasValid = true;

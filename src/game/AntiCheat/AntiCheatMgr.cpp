@@ -104,7 +104,22 @@ void AntiCheatMgr::RecordViolation(Player* player, AntiCheatViolationType type,
 {
     if (!m_enabled || !player || IsExempt(player))
         return;
+    DoRecord(player, type, weight, ctx);
+}
 
+void AntiCheatMgr::TestInject(Player* player, AntiCheatViolationType type,
+                              float weight, AntiCheatContext const& ctx)
+{
+    // Deliberately bypasses the enabled/exempt gate so `.anticheat test` can drive
+    // the whole pipeline (scoring, decay, persist, marker, escalation) on a GM.
+    if (!player)
+        return;
+    DoRecord(player, type, weight, ctx);
+}
+
+void AntiCheatMgr::DoRecord(Player* player, AntiCheatViolationType type,
+                            float weight, AntiCheatContext const& ctx)
+{
     // Clamp weight defensively so a single buggy detector can't spike the score.
     if (weight < 0.0f) weight = 0.0f;
     if (weight > 100.0f) weight = 100.0f;
@@ -129,6 +144,44 @@ void AntiCheatMgr::RecordViolation(Player* player, AntiCheatViolationType type,
     DebugVisualizer::Mark(player, type, ctx.x, ctx.y, ctx.z);
 
     Apply(player, score, type, ctx);
+}
+
+void AntiCheatMgr::SetScore(Player* player, float score)
+{
+    if (!player)
+        return;
+    if (score < 0.0f) score = 0.0f;
+
+    uint32 nowMS = getMSTime();
+    {
+        std::lock_guard<std::mutex> guard(m_lock);
+        ScoreState& s = m_scores[player->GetGUIDLow()];
+        DecayedScore(s, nowMS);   // settle decay before overwriting
+        s.score = score;
+    }
+
+    AntiCheatContext ctx;
+    ctx.mapId = player->GetMapId();
+    ctx.x = player->GetPositionX(); ctx.y = player->GetPositionY(); ctx.z = player->GetPositionZ();
+    ctx.detail = "GM set score";
+    Apply(player, score, AC_VIOLATION_NONE, ctx);
+}
+
+void AntiCheatMgr::BuildDiag(std::string& out)
+{
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+             "AntiCheat config: enabled=%u movement=%u physics=%u accelCheck=%u | "
+             "actionCeiling=%u warn=%u rubber=%u kick=%u decay/s=%u | "
+             "speedTol=%u%% teleDist=%u | autoban=%u (kickPts=%u thr=%u) | "
+             "persist=%u exemptGmLvl=%u exemptBots=%u",
+             (uint32)m_enabled, (uint32)m_movementEnabled, (uint32)m_physicsEnabled,
+             (uint32)sWorld.getConfig(CONFIG_BOOL_ANTICHEAT_ACCEL_CHECK),
+             m_actionCeiling, m_scoreWarn, m_scoreRubberband, m_scoreKick, m_decayPerSec,
+             m_speedTolerancePct, m_teleportDistance,
+             (uint32)m_autobanEnable, m_autobanKickPoints, m_autobanThreshold,
+             (uint32)m_persist, m_exemptGmLevel, (uint32)m_exemptBots);
+    out = buf;
 }
 
 void AntiCheatMgr::Apply(Player* player, float score, AntiCheatViolationType type,

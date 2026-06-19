@@ -63,6 +63,19 @@ class AntiCheatMgr
         void RecordViolation(Player* player, AntiCheatViolationType type,
                              float weight, AntiCheatContext const& ctx);
 
+        // GM/dev TEST ingress: runs the full scoring+persist+marker+escalation
+        // pipeline while BYPASSING the enabled/exempt gate, so `.anticheat test`
+        // can exercise every capability on a GM. Not used by detectors.
+        void TestInject(Player* player, AntiCheatViolationType type,
+                        float weight, AntiCheatContext const& ctx);
+
+        // Append a human-readable snapshot of the live AC config (for diagnostics).
+        void BuildDiag(std::string& out);
+
+        // GM tool: set a player's live AC score directly and evaluate escalation
+        // (lets a GM drive the score to a threshold to exercise warn/rubberband/kick).
+        void SetScore(Player* player, float score);
+
         // World-tick maintenance: prune idle score entries. Cheap.
         void Update(uint32 diff);
 
@@ -110,6 +123,11 @@ class AntiCheatMgr
             uint32 durationSecs;    // 0 = permanent
             std::string reason;
         };
+
+        // Shared post-gate body for RecordViolation/TestInject: score, persist,
+        // mark, escalate.
+        void DoRecord(Player* player, AntiCheatViolationType type,
+                      float weight, AntiCheatContext const& ctx);
 
         // Lazily decay the score to "now" using the configured decay rate.
         float DecayedScore(ScoreState& s, uint32 nowMS) const;

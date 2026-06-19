@@ -949,6 +949,10 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_ANTICHEAT_DECAY,  "AntiCheat.Score.DecayPerSec", 2, 0, 100);
     // Spell-cast timing: more than this many cast requests per second = cast spam.
     setConfigMinMax(CONFIG_UINT32_ANTICHEAT_CAST_BURST, "AntiCheat.CastBurstPerSec", 8, 2, 100);
+    // Acceleration/velocity-delta gate (FP-prone; OFF by default). Flags a sudden
+    // speed increase beyond allowed-speed * this multiplier per second.
+    setConfig(CONFIG_BOOL_ANTICHEAT_ACCEL_CHECK,    "AntiCheat.AccelCheck", false);
+    setConfigMinMax(CONFIG_UINT32_ANTICHEAT_ACCEL_MULT, "AntiCheat.AccelMaxMult", 6, 2, 50);
     setConfig(CONFIG_BOOL_TIMESYNC_ENABLE,          "TimeSync.Enable", true);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_ALPHA,   "TimeSync.EWMA.Alpha", 20, 1, 100);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_DESYNC,  "TimeSync.Desync.Threshold", 1000, 100, 60000);

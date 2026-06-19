@@ -261,6 +261,11 @@ class ChatHandler
         bool HandleAntiCheatJailCommand(char* args);
         bool HandleAntiCheatUnjailCommand(char* args);
         bool HandleAntiCheatDeleteCommand(char* args);
+        bool HandleAntiCheatTestCommand(char* args);
+        bool HandleAntiCheatRubberbandCommand(char* args);
+        bool HandleAntiCheatResyncCommand(char* args);
+        bool HandleAntiCheatTimeSkipCommand(char* args);
+        bool HandleAntiCheatScoreCommand(char* args);
 
         // Server-side debug visualization commands
         bool HandleDebugVisCellsCommand(char* args);

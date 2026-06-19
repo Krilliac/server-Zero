@@ -121,6 +121,10 @@ class MovementAnticheat
         // path's m_lastClientTime so it can't skew the per-packet desync delta).
         bool   m_hasAckTime;
         uint32 m_lastAckTime;
+
+        // Kinematics (acceleration / velocity-delta gate).
+        bool   m_hasKin;
+        float  m_lastSpeed;
 };
 
 #endif // MANGOS_ANTICHEAT_MOVEMENTANTICHEAT_H

@@ -261,6 +261,11 @@ ChatCommand* ChatHandler::getCommandTable()
         { "jail",           SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatJailCommand,            "", NULL },
         { "unjail",         SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatUnjailCommand,          "", NULL },
         { "delete",         SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatDeleteCommand,          "", NULL },
+        { "test",           SEC_ADMINISTRATOR,  false, &ChatHandler::HandleAntiCheatTestCommand,            "", NULL },
+        { "rubberband",     SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatRubberbandCommand,      "", NULL },
+        { "resync",         SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatResyncCommand,          "", NULL },
+        { "timeskip",       SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatTimeSkipCommand,        "", NULL },
+        { "score",          SEC_ADMINISTRATOR,  false, &ChatHandler::HandleAntiCheatScoreCommand,           "", NULL },
         { NULL,             0,                  false, NULL,                                                "", NULL }
     };
 
