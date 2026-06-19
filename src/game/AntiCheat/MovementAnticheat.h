@@ -46,6 +46,7 @@ class MovementAnticheat
         // correction) read it. Valid once HasClockOffset() is true.
         bool   HasClockOffset() const { return m_hasClockOffset; }
         int64  GetClockOffsetMs() const { return m_clockOffsetMs; }
+        uint32 GetDesyncStreak() const { return m_desyncStreak; }
 
         // Called when the SERVER relocates the player (teleport ack, map change)
         // so the next client packet is trusted and the baseline is rebuilt

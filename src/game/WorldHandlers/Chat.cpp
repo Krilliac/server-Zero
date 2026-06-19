@@ -263,9 +263,18 @@ ChatCommand* ChatHandler::getCommandTable()
         { "delete",         SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatDeleteCommand,          "", NULL },
         { "test",           SEC_ADMINISTRATOR,  false, &ChatHandler::HandleAntiCheatTestCommand,            "", NULL },
         { "rubberband",     SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatRubberbandCommand,      "", NULL },
-        { "resync",         SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatResyncCommand,          "", NULL },
-        { "timeskip",       SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatTimeSkipCommand,        "", NULL },
         { "score",          SEC_ADMINISTRATOR,  false, &ChatHandler::HandleAntiCheatScoreCommand,           "", NULL },
+        { NULL,             0,                  false, NULL,                                                "", NULL }
+    };
+
+    static ChatCommand timesyncCommandTable[] =
+    {
+        { "status",         SEC_GAMEMASTER,     false, &ChatHandler::HandleTimeSyncStatusCommand,           "", NULL },
+        { "config",         SEC_GAMEMASTER,     false, &ChatHandler::HandleTimeSyncConfigCommand,           "", NULL },
+        { "set",            SEC_ADMINISTRATOR,  false, &ChatHandler::HandleTimeSyncSetCommand,              "", NULL },
+        { "resync",         SEC_GAMEMASTER,     false, &ChatHandler::HandleTimeSyncResyncCommand,           "", NULL },
+        { "skip",           SEC_GAMEMASTER,     false, &ChatHandler::HandleTimeSyncSkipCommand,             "", NULL },
+        { "desync",         SEC_GAMEMASTER,     false, &ChatHandler::HandleTimeSyncDesyncCommand,           "", NULL },
         { NULL,             0,                  false, NULL,                                                "", NULL }
     };
 
@@ -789,6 +798,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "ahbot",          SEC_ADMINISTRATOR,  true,  NULL,                                           "", ahbotCommandTable    },
         { "anticheat",      SEC_GAMEMASTER,     true,  NULL,                                           "", anticheatCommandTable},
         { "spoof",          SEC_GAMEMASTER,     false, &ChatHandler::HandleSpoofCommand,                "", NULL                 },
+        { "timesync",       SEC_GAMEMASTER,     true,  NULL,                                           "", timesyncCommandTable },
         { "cast",           SEC_ADMINISTRATOR,  false, NULL,                                           "", castCommandTable     },
         { "character",      SEC_GAMEMASTER,     true,  NULL,                                           "", characterCommandTable},
         { "debug",          SEC_MODERATOR,      true,  NULL,                                           "", debugCommandTable    },

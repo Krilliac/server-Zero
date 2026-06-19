@@ -376,14 +376,128 @@ bool ChatHandler::HandleAntiCheatRubberbandCommand(char* /*args*/)
     return true;
 }
 
-bool ChatHandler::HandleAntiCheatResyncCommand(char* /*args*/)
+// --- Time-sync / desync system commands (get/set/inspect + actions) ---
+
+bool ChatHandler::HandleTimeSyncStatusCommand(char* /*args*/)
 {
     Player* target = getSelectedPlayer();
     if (!target)
         target = m_session ? m_session->GetPlayer() : NULL;
     if (!target)
     {
-        SendSysMessage(".anticheat resync FAILED: no player. Select/target a player or run in-game. "
+        SendSysMessage(".timesync status FAILED: no player. Select/target a player or run in-game.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    uint32 latency = target->GetSession() ? target->GetSession()->GetLatencyEWMA() : 0;
+    MovementAnticheat* mac = target->GetMovementAnticheat();
+    PSendSysMessage("TimeSync %s: latency(EWMA)=%ums  clockOffset=%s%lldms  desyncStreak=%u",
+                    target->GetName(), latency,
+                    (mac && mac->HasClockOffset()) ? "" : "(none) ",
+                    (mac && mac->HasClockOffset()) ? (long long)mac->GetClockOffsetMs() : 0LL,
+                    mac ? mac->GetDesyncStreak() : 0);
+    return true;
+}
+
+bool ChatHandler::HandleTimeSyncConfigCommand(char* /*args*/)
+{
+    PSendSysMessage("TimeSync config: enable=%u alpha=%u desyncThreshold=%ums maxSkip=%ums",
+                    (uint32)sWorld.getConfig(CONFIG_BOOL_TIMESYNC_ENABLE),
+                    sWorld.getConfig(CONFIG_UINT32_TIMESYNC_ALPHA),
+                    sWorld.getConfig(CONFIG_UINT32_TIMESYNC_DESYNC),
+                    sWorld.getConfig(CONFIG_UINT32_TIMESYNC_MAX_SKIP));
+    PSendSysMessage("  moveCorrection=%u autoResync=%u resyncTrips=%u resyncCooldown=%ums",
+                    (uint32)sWorld.getConfig(CONFIG_BOOL_TIMESYNC_MOVE_CORRECTION),
+                    (uint32)sWorld.getConfig(CONFIG_BOOL_TIMESYNC_AUTORESYNC),
+                    sWorld.getConfig(CONFIG_UINT32_TIMESYNC_RESYNC_TRIPS),
+                    sWorld.getConfig(CONFIG_UINT32_TIMESYNC_RESYNC_COOLDOWN));
+    SendSysMessage("Set at runtime with .timesync set <field> <value> (reverts on restart/reload).");
+    return true;
+}
+
+bool ChatHandler::HandleTimeSyncSetCommand(char* args)
+{
+    char* f = strtok(args, " ");
+    char* v = strtok(NULL, " ");
+    if (!f || !v)
+    {
+        SendSysMessage(".timesync set FAILED. Usage: .timesync set <field> <value>. Fields:");
+        SendSysMessage("  bool:  enable, movecorrection, autoresync");
+        SendSysMessage("  uint:  alpha, desyncthreshold, maxskip, resynctrips, resynccooldown");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    std::string field = f;
+    for (size_t i = 0; i < field.size(); ++i) field[i] = (char)tolower(field[i]);
+    uint32 val = uint32(atoi(v));
+
+    if      (field == "enable")         sWorld.setConfig(CONFIG_BOOL_TIMESYNC_ENABLE, val != 0);
+    else if (field == "movecorrection") sWorld.setConfig(CONFIG_BOOL_TIMESYNC_MOVE_CORRECTION, val != 0);
+    else if (field == "autoresync")     sWorld.setConfig(CONFIG_BOOL_TIMESYNC_AUTORESYNC, val != 0);
+    else if (field == "alpha")          sWorld.setConfig(CONFIG_UINT32_TIMESYNC_ALPHA, val);
+    else if (field == "desyncthreshold")sWorld.setConfig(CONFIG_UINT32_TIMESYNC_DESYNC, val);
+    else if (field == "maxskip")        sWorld.setConfig(CONFIG_UINT32_TIMESYNC_MAX_SKIP, val);
+    else if (field == "resynctrips")    sWorld.setConfig(CONFIG_UINT32_TIMESYNC_RESYNC_TRIPS, val);
+    else if (field == "resynccooldown") sWorld.setConfig(CONFIG_UINT32_TIMESYNC_RESYNC_COOLDOWN, val);
+    else
+    {
+        PSendSysMessage(".timesync set FAILED: unknown field '%s'.", field.c_str());
+        SetSentErrorMessage(true);
+        return false;
+    }
+    PSendSysMessage("TimeSync: set %s = %u (runtime; reverts on restart/reload).", field.c_str(), val);
+    return true;
+}
+
+bool ChatHandler::HandleTimeSyncDesyncCommand(char* args)
+{
+    char* tok = strtok(args, " ");
+    uint32 n = tok ? uint32(atoi(tok)) : 5;
+    if (n < 1) n = 1;
+    if (n > 50) n = 50;
+
+    Player* target = getSelectedPlayer();
+    if (!target)
+        target = m_session ? m_session->GetPlayer() : NULL;
+    if (!target)
+    {
+        SendSysMessage(".timesync desync FAILED: no player. Select/target a player or run in-game. "
+                       "Usage: .timesync desync [count]. Fires the desync detector then resyncs.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    // Fire the real desync detector n times (visible: score climbs, markers, log)...
+    std::string desc;
+    sAntiCheatMgr->SetTestBypass(true);
+    for (uint32 i = 0; i < n; ++i)
+        target->GetMovementAnticheat()->SimulateCheat("desync", 0.0f, desc);
+    sAntiCheatMgr->SetTestBypass(false);
+
+    // ...then show the resync correction in action (the rubberband).
+    target->NearTeleportTo(target->GetPositionX(), target->GetPositionY(),
+                           target->GetPositionZ(), target->GetOrientation());
+    if (MovementAnticheat* mac = target->GetMovementAnticheat())
+        mac->NotifyServerRelocation();
+
+    PSendSysMessage("TimeSync: simulated %u desync events on %s and performed a resync. "
+                    "(For fully-automatic resync, enable TimeSync.AutoResync and trip a non-GM char.)",
+                    n, target->GetName());
+    std::string st;
+    sAntiCheatMgr->BuildStatus(target, st);
+    SendSysMessage(st.c_str());
+    return true;
+}
+
+bool ChatHandler::HandleTimeSyncResyncCommand(char* /*args*/)
+{
+    Player* target = getSelectedPlayer();
+    if (!target)
+        target = m_session ? m_session->GetPlayer() : NULL;
+    if (!target)
+    {
+        SendSysMessage(".timesync resync FAILED: no player. Select/target a player or run in-game. "
                        "It rubberbands them to their current authoritative position (clock resync).");
         SetSentErrorMessage(true);
         return false;
@@ -393,17 +507,17 @@ bool ChatHandler::HandleAntiCheatResyncCommand(char* /*args*/)
                            target->GetPositionZ(), target->GetOrientation());
     if (MovementAnticheat* mac = target->GetMovementAnticheat())
         mac->NotifyServerRelocation();
-    PSendSysMessage("AntiCheat: resynced %s to current position.", target->GetName());
+    PSendSysMessage("TimeSync: resynced %s to current position.", target->GetName());
     return true;
 }
 
-bool ChatHandler::HandleAntiCheatTimeSkipCommand(char* args)
+bool ChatHandler::HandleTimeSyncSkipCommand(char* args)
 {
     char* tok = strtok(args, " ");
     if (!tok)
     {
-        SendSysMessage(".anticheat timeskip FAILED: needs milliseconds. Usage: .anticheat timeskip "
-                       "<ms>. Feeds a synthetic client time-skip to the target (drives the time-sync "
+        SendSysMessage(".timesync skip FAILED: needs milliseconds. Usage: .timesync skip <ms>. "
+                       "Feeds a synthetic client time-skip to the target (drives the time-sync "
                        "service; large values score as a time hack).");
         SetSentErrorMessage(true);
         return false;
@@ -415,14 +529,14 @@ bool ChatHandler::HandleAntiCheatTimeSkipCommand(char* args)
         target = m_session ? m_session->GetPlayer() : NULL;
     if (!target)
     {
-        SendSysMessage(".anticheat timeskip FAILED: no player. Select/target a player or run in-game.");
+        SendSysMessage(".timesync skip FAILED: no player. Select/target a player or run in-game.");
         SetSentErrorMessage(true);
         return false;
     }
 
     if (MovementAnticheat* mac = target->GetMovementAnticheat())
         mac->NotifyClientTimeSkip(ms);
-    PSendSysMessage("AntiCheat: fed a %u ms time-skip to %s.", ms, target->GetName());
+    PSendSysMessage("TimeSync: fed a %u ms time-skip to %s.", ms, target->GetName());
     return true;
 }
 
