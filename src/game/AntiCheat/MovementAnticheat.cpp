@@ -12,6 +12,7 @@
 #include "Unit.h"
 #include "Opcodes.h"
 #include "Timer.h"
+#include "Log.h"
 
 #include <cmath>
 
@@ -23,6 +24,8 @@ namespace
     const float  FALL_SUPPRESS_YD   = 20.0f;  // drop beyond this should incur fall damage
     const uint32 BURST_PER_SEC      = 50;     // movement packets/sec beyond this = burst
     const uint32 CLIENT_TIME_BACK_MS = 500;   // client timestamp regression tolerance
+    const uint32 SKIP_WINDOW_MS      = 10000;  // move-time-skip abuse counting window
+    const uint32 SKIP_MAX_PER_WINDOW = 10;     // legit clients rarely skip this often
 }
 
 MovementAnticheat::MovementAnticheat(Player* owner)
@@ -33,7 +36,9 @@ MovementAnticheat::MovementAnticheat(Player* owner)
       m_hasTrace(false), m_traceX(0.f), m_traceY(0.f), m_traceZ(0.f),
       m_airborne(false), m_fallApexZ(0.f),
       m_burstWinStartMS(0), m_burstCount(0), m_lastClientTime(0), m_hasClientTime(false),
-      m_hasClockOffset(false), m_clockOffsetMs(0)
+      m_hasClockOffset(false), m_clockOffsetMs(0),
+      m_timeSkipGraceUntilMS(0), m_desyncStreak(0), m_lastResyncMS(0),
+      m_skipWinStartMS(0), m_skipCount(0), m_skipAccumMs(0)
 {
 }
 
@@ -194,7 +199,10 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
     // elapsed time within latency jitter. Zero client-time while moving, or a
     // large divergence, is time-manipulation desync (fake-slow movement / speed
     // via clock control) — the vanilla-compatible equivalent of WotLK time sync.
-    if (haveClientDt && horiz > 1.0f && state != AC_MOVE_TRANSPORT)
+    // The grace window after a client-reported MOVE_TIME_SKIPPED suppresses this
+    // (the client already told us its clock jumped — not a cheat).
+    if (haveClientDt && horiz > 1.0f && state != AC_MOVE_TRANSPORT &&
+        nowMS >= m_timeSkipGraceUntilMS)
     {
         uint32 tol = sWorld.getConfig(CONFIG_UINT32_TIMESYNC_DESYNC) + latency;
         if (clientDt == 0)
@@ -202,6 +210,7 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
             ctx.detail = "zero client time while moving (time hack)";
             sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_DESYNC, 20.0f, ctx);
             cheapTrip = true;
+            ++m_desyncStreak;
         }
         else
         {
@@ -210,6 +219,11 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
             {
                 ctx.detail = "client/server time divergence (desync)";
                 sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_DESYNC, 8.0f, ctx);
+                ++m_desyncStreak;          // feeds optional auto-resync
+            }
+            else if (m_desyncStreak > 0)
+            {
+                --m_desyncStreak;          // decay on clean, in-sync packets
             }
         }
     }
@@ -311,7 +325,32 @@ void MovementAnticheat::PeriodicCheck()
 {
     if (!m_player || !m_player->IsInWorld())
         return;
-    if (!sAntiCheatMgr->PhysicsEnabled() || sAntiCheatMgr->IsExempt(m_player))
+    if (sAntiCheatMgr->IsExempt(m_player))
+        return;
+
+    // --- Desync auto-resync (gated, OFF by default) ---
+    // When the per-packet desync detector has tripped repeatedly, the client clock
+    // has drifted out of sync. There is no vanilla TIME_SYNC opcode to correct it,
+    // so the only reliable lever is to rubberband the client to its current
+    // server-authoritative position; NotifyServerRelocation re-baselines so the
+    // correction itself isn't re-scored. Cooldown-limited to avoid yo-yoing.
+    if (sWorld.getConfig(CONFIG_BOOL_TIMESYNC_AUTORESYNC) &&
+        m_desyncStreak >= sWorld.getConfig(CONFIG_UINT32_TIMESYNC_RESYNC_TRIPS))
+    {
+        uint32 now = getMSTime();
+        if (now - m_lastResyncMS >= sWorld.getConfig(CONFIG_UINT32_TIMESYNC_RESYNC_COOLDOWN))
+        {
+            m_player->NearTeleportTo(m_player->GetPositionX(), m_player->GetPositionY(),
+                                     m_player->GetPositionZ(), m_player->GetOrientation());
+            NotifyServerRelocation();
+            m_lastResyncMS = now;
+            m_desyncStreak = 0;
+            sLog.outDetail("TimeSync: resync guid=%u (sustained desync)", m_player->GetGUIDLow());
+        }
+    }
+
+    // Idle terrain re-validation needs the physics module enabled.
+    if (!sAntiCheatMgr->PhysicsEnabled())
         return;
 
     // Re-validate the player's current (idle) position against terrain — catches
@@ -330,4 +369,63 @@ void MovementAnticheat::PeriodicCheck()
         ctx.detail = reason ? reason : "physics impossible (idle)";
         sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 20.0f, ctx);
     }
+}
+
+void MovementAnticheat::NotifyClientTimeSkip(uint32 skippedMs)
+{
+    if (!m_player)
+        return;
+
+    uint32 now = getMSTime();
+
+    // --- Anti-cheat: CMSG_MOVE_TIME_SKIPPED abuse (time-based movement masking) ---
+    // Cheats inflate or spam the reported skip to claim extra movement budget
+    // (covering speed/teleport distance "in skipped time"). Score by magnitude,
+    // frequency and accumulation within a rolling window.
+    if (m_skipWinStartMS == 0 || now - m_skipWinStartMS > SKIP_WINDOW_MS)
+    {
+        m_skipWinStartMS = now;
+        m_skipCount = 0;
+        m_skipAccumMs = 0;
+    }
+    ++m_skipCount;
+    m_skipAccumMs += skippedMs;
+
+    if (sAntiCheatMgr->MovementEnabled() && !sAntiCheatMgr->IsExempt(m_player))
+    {
+        uint32 maxSkip = sWorld.getConfig(CONFIG_UINT32_TIMESYNC_MAX_SKIP);
+        AntiCheatContext ctx;
+        ctx.mapId = m_player->GetMapId();
+        ctx.x = m_player->GetPositionX(); ctx.y = m_player->GetPositionY(); ctx.z = m_player->GetPositionZ();
+        ctx.latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
+
+        if (skippedMs > maxSkip)
+        {
+            float ratio = float(skippedMs) / float(maxSkip ? maxSkip : 1);
+            float weight = ratio * 8.0f;
+            if (weight > 30.0f) weight = 30.0f;
+            ctx.detail = "oversized move-time-skip (time hack)";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_DESYNC, weight, ctx);
+        }
+        if (m_skipCount > SKIP_MAX_PER_WINDOW)
+        {
+            ctx.detail = "move-time-skip spam";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PACKETTIMING, 12.0f, ctx);
+        }
+        if (m_skipAccumMs > maxSkip * 3)
+        {
+            ctx.detail = "excessive accumulated time-skip";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_DESYNC, 10.0f, ctx);
+        }
+    }
+
+    // --- Legit handling: a real skip means the client clock jumped, so re-baseline
+    // the clock service and grace the per-packet desync detector so the same event
+    // isn't double-counted as divergence. ---
+    uint32 grace = skippedMs + 1000;
+    if (grace > 5000) grace = 5000;
+    m_timeSkipGraceUntilMS = now + grace;
+    m_hasClockOffset = false;   // re-seed offset from the new client timebase
+    m_hasClientTime  = false;   // re-seed the client-timestamp baseline
+    m_trustNext      = true;    // the skip itself moves nothing; trust the next packet
 }

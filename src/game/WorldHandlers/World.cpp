@@ -950,6 +950,14 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_TIMESYNC_ENABLE,          "TimeSync.Enable", true);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_ALPHA,   "TimeSync.EWMA.Alpha", 20, 1, 100);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_DESYNC,  "TimeSync.Desync.Threshold", 1000, 100, 60000);
+    // CMSG_MOVE_TIME_SKIPPED handling: skips above this many ms are treated as a
+    // time-based cheat signal (legit lag-freezes are usually well under this).
+    setConfigMinMax(CONFIG_UINT32_TIMESYNC_MAX_SKIP, "TimeSync.MaxSkipMs", 2000, 200, 60000);
+    // Optional desync auto-resync: after this many sustained desync trips, rubberband
+    // the client to its authoritative position (the only vanilla resync lever).
+    setConfig(CONFIG_BOOL_TIMESYNC_AUTORESYNC,      "TimeSync.AutoResync", false);
+    setConfigMinMax(CONFIG_UINT32_TIMESYNC_RESYNC_TRIPS,    "TimeSync.ResyncDesyncTrips", 5, 1, 100);
+    setConfigMinMax(CONFIG_UINT32_TIMESYNC_RESYNC_COOLDOWN, "TimeSync.ResyncCooldownMs", 10000, 1000, 600000);
     // Movement-sync corrective option: normalise relayed movement timestamps to
     // the server clock so observers interpolate other players on one timebase.
     // Higher-risk movement netcode — OFF by default for A/B testing.

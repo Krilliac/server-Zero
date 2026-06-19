@@ -43,6 +43,13 @@ class MovementAnticheat
         // instead of being scored as an impossible jump.
         void NotifyServerRelocation() { m_trustNext = true; }
 
+        // Called when the client reports a movement time skip
+        // (CMSG_MOVE_TIME_SKIPPED) — a legitimate client clock jump after a freeze.
+        // Re-baselines the clock service + arms a grace window so the same event
+        // isn't double-scored as desync, AND scores the skip itself for abuse
+        // (oversized / spammed skips are a time-based speed/teleport-mask vector).
+        void NotifyClientTimeSkip(uint32 skippedMs);
+
         // Last position that passed the teleport/physics gates (rubberband target
         // for the enforcement slice). Valid only if HasValid() is true.
         bool HasValid() const { return m_hasValid; }
@@ -82,6 +89,16 @@ class MovementAnticheat
         // Movement-sync clock-offset service (smoothed server-vs-client clock).
         bool   m_hasClockOffset;
         int64  m_clockOffsetMs;
+
+        // Time-sync / desync-resync state.
+        uint32 m_timeSkipGraceUntilMS; // suppress per-packet desync scoring until here
+        uint32 m_desyncStreak;         // consecutive desync trips (auto-resync trigger)
+        uint32 m_lastResyncMS;         // last auto-resync server time (cooldown)
+
+        // CMSG_MOVE_TIME_SKIPPED abuse window (frequency + accumulation).
+        uint32 m_skipWinStartMS;
+        uint32 m_skipCount;
+        uint32 m_skipAccumMs;
 };
 
 #endif // MANGOS_ANTICHEAT_MOVEMENTANTICHEAT_H
