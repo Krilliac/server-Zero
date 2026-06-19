@@ -14,6 +14,8 @@
 #include "Common.h"
 #include "AntiCheatDefines.h"
 
+#include <string>
+
 class Player;
 class MovementInfo;
 
@@ -25,6 +27,13 @@ class MovementAnticheat
         // Main entry: called from the movement opcode handler after the packet
         // is parsed and before it is applied. opcode is the movement opcode.
         void HandlePositionUpdate(uint16 opcode, MovementInfo const& mi);
+
+        // GM/dev `.cheat` tooling: craft the packet signature of a named cheat and
+        // run it through the REAL detectors (a live end-to-end test of detection +
+        // response), restoring the validator baseline afterwards so live tracking
+        // is unaffected. Requires the manager's test-bypass to be set by the caller.
+        // Returns false (with reason in `outDesc`) for an unknown kind.
+        bool SimulateCheat(const std::string& kind, float mag, std::string& outDesc);
 
         // Periodic (timer-driven from Player::Update) re-validation of the player's
         // current position — a second cadence that catches static exploits where no
@@ -42,6 +51,15 @@ class MovementAnticheat
         // so the next client packet is trusted and the baseline is rebuilt
         // instead of being scored as an impossible jump.
         void NotifyServerRelocation() { m_trustNext = true; }
+
+        // Record a server-GRANTED movement capability flag (water-walk, hover,
+        // slow-fall, levitate, fly) so the flag-spoof detectors treat the client
+        // asserting it as legitimate (aura OR granted), not a spoof. Set by the
+        // legit GM tooling / could be wired into the Player Set* setters.
+        void SetGrantedFlag(uint32 flag, bool on)
+        {
+            if (on) m_grantedFlags |= flag; else m_grantedFlags &= ~flag;
+        }
 
         // Called when the client reports a movement time skip
         // (CMSG_MOVE_TIME_SKIPPED) — a legitimate client clock jump after a freeze.
@@ -125,6 +143,10 @@ class MovementAnticheat
         // Kinematics (acceleration / velocity-delta gate).
         bool   m_hasKin;
         float  m_lastSpeed;
+
+        // Server-granted movement capability flags (water-walk/hover/etc.) — the
+        // flag-spoof detectors accept these as legitimate alongside auras.
+        uint32 m_grantedFlags;
 };
 
 #endif // MANGOS_ANTICHEAT_MOVEMENTANTICHEAT_H

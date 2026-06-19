@@ -5386,6 +5386,10 @@ void Player::SetWaterWalk(bool enable)
     data << GetPackGUID();
     data << uint32(0);
     GetSession()->SendPacket(&data);
+    // Record the server grant so the anti-cheat treats the client asserting the
+    // water-walk flag as legitimate (single source of truth for all callers:
+    // GM commands, spell auras, scripts).
+    GetMovementAnticheat()->SetGrantedFlag(MOVEFLAG_WATERWALKING, enable);
 }
 
 /**
@@ -5430,6 +5434,7 @@ void Player::SetCanFly(bool enable)
     }
 
     SendHeartBeat();
+    GetMovementAnticheat()->SetGrantedFlag(MOVEFLAG_FLYING | MOVEFLAG_CAN_FLY, enable);
 }
 
 /**
@@ -5458,6 +5463,7 @@ void Player::SetFeatherFall(bool enable)
     {
         SetFallInformation(0, GetPositionZ());
     }
+    GetMovementAnticheat()->SetGrantedFlag(MOVEFLAG_SAFE_FALL, enable);
 }
 
 /**
@@ -5480,6 +5486,7 @@ void Player::SetHover(bool enable)
     data << GetPackGUID();
     data << uint32(0);
     SendMessageToSet(&data, true);
+    GetMovementAnticheat()->SetGrantedFlag(MOVEFLAG_HOVER, enable);
 }
 
 /** Preconditions:

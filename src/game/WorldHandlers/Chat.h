@@ -266,6 +266,7 @@ class ChatHandler
         bool HandleAntiCheatResyncCommand(char* args);
         bool HandleAntiCheatTimeSkipCommand(char* args);
         bool HandleAntiCheatScoreCommand(char* args);
+        bool HandleSpoofCommand(char* args);
 
         // Server-side debug visualization commands
         bool HandleDebugVisCellsCommand(char* args);

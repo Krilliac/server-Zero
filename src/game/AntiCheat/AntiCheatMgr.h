@@ -76,6 +76,12 @@ class AntiCheatMgr
         // (lets a GM drive the score to a threshold to exercise warn/rubberband/kick).
         void SetScore(Player* player, float score);
 
+        // When set, RecordViolation bypasses the enabled/exempt gate and the
+        // *Enabled() getters report true — so `.cheat` simulations drive the real
+        // detectors and apply results even on an exempt GM / with AC disabled.
+        // Set only briefly around a synchronous simulation on the world thread.
+        void SetTestBypass(bool on) { m_testBypass = on; }
+
         // World-tick maintenance: prune idle score entries. Cheap.
         void Update(uint32 diff);
 
@@ -88,8 +94,8 @@ class AntiCheatMgr
         // Config getters (cached snapshot).
         uint32 GetSpeedTolerancePct() const { return m_speedTolerancePct; }
         uint32 GetTeleportDistance()  const { return m_teleportDistance; }
-        bool   MovementEnabled() const { return m_enabled && m_movementEnabled; }
-        bool   PhysicsEnabled()  const { return m_enabled && m_physicsEnabled; }
+        bool   MovementEnabled() const { return m_testBypass || (m_enabled && m_movementEnabled); }
+        bool   PhysicsEnabled()  const { return m_testBypass || (m_enabled && m_physicsEnabled); }
 
     private:
         AntiCheatMgr();
@@ -151,6 +157,7 @@ class AntiCheatMgr
         void PersistAccount(uint32 accountId, AccountState const& s);
 
         bool   m_enabled;
+        bool   m_testBypass;          // transient: `.cheat` simulation in progress
         bool   m_movementEnabled;
         bool   m_physicsEnabled;
         bool   m_exemptBots;

@@ -283,6 +283,69 @@ bool ChatHandler::HandleAntiCheatTestCommand(char* args)
     return true;
 }
 
+// Live-fire SPOOF simulator: activates the actual cheat signature through the real
+// detectors. Doubles as GM tooling and an end-to-end anti-cheat self-test. The
+// legitimate counterpart is `.legit` (applies the real effect; should NOT detect).
+bool ChatHandler::HandleSpoofCommand(char* args)
+{
+    static const char* kinds[] = {
+        "speed", "teleport", "fly", "waterwalk", "hover", "slowfall", "swim",
+        "transport", "vertical", "jump", "desync", "noclip"
+    };
+    const uint32 kindCount = uint32(sizeof(kinds) / sizeof(kinds[0]));
+
+    char* tok = strtok(args, " ");
+    std::string kind = tok ? tok : "";
+    for (size_t i = 0; i < kind.size(); ++i) kind[i] = (char)tolower(kind[i]);
+    if (!tok || kind == "list" || kind == "help")
+    {
+        SendSysMessage("Spoof simulator (live anti-cheat test + GM tooling). Usage:");
+        SendSysMessage("  .spoof <kind> [magnitude]   - run the cheat's signature through the detectors");
+        std::string line = "  kinds: ";
+        for (uint32 i = 0; i < kindCount; ++i) { line += kinds[i]; if (i + 1 < kindCount) line += ", "; }
+        SendSysMessage(line.c_str());
+        SendSysMessage("Runs on your target (or you). Bypasses GM-exempt/disabled so the result shows.");
+        SendSysMessage("Legit versions use the real commands (.fly, .waterwalk, .modify speed) / spell");
+        SendSysMessage("auras - those record a server grant so the AC does NOT flag them.");
+        if (!tok) { SetSentErrorMessage(true); return false; }
+        return true;
+    }
+
+    char* w = strtok(NULL, " ");
+    float mag = w ? float(atof(w)) : 0.0f;
+
+    Player* target = getSelectedPlayer();
+    if (!target)
+        target = m_session ? m_session->GetPlayer() : NULL;
+    if (!target)
+    {
+        SendSysMessage(".spoof FAILED: no player. Select/target a player or run in-game.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    // Drive the real detectors and force the result to apply (target may be an
+    // exempt GM, and AC may be off). Bypass is set only around this synchronous call.
+    std::string desc;
+    sAntiCheatMgr->SetTestBypass(true);
+    bool ok = target->GetMovementAnticheat()->SimulateCheat(kind, mag, desc);
+    sAntiCheatMgr->SetTestBypass(false);
+
+    if (!ok)
+    {
+        PSendSysMessage(".spoof FAILED: %s. Try .spoof list.", desc.c_str());
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    PSendSysMessage("Spoof simulated on %s: %s. Detector result below (also logged/persisted):",
+                    target->GetName(), desc.c_str());
+    std::string status;
+    sAntiCheatMgr->BuildStatus(target, status);
+    SendSysMessage(status.c_str());
+    return true;
+}
+
 // --- Dedicated AC-vector GM tools (manipulate the mechanics directly) ---
 
 bool ChatHandler::HandleAntiCheatRubberbandCommand(char* /*args*/)

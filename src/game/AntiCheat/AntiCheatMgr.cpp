@@ -15,7 +15,7 @@
 #include <cstdio>
 
 AntiCheatMgr::AntiCheatMgr()
-    : m_enabled(false), m_movementEnabled(false), m_physicsEnabled(false),
+    : m_enabled(false), m_testBypass(false), m_movementEnabled(false), m_physicsEnabled(false),
       m_exemptBots(true), m_persist(true), m_exemptGmLevel(1),
       m_actionCeiling(AC_ACTION_LOG), m_speedTolerancePct(110),
       m_teleportDistance(50), m_scoreWarn(30), m_scoreRubberband(60),
@@ -102,7 +102,10 @@ float AntiCheatMgr::DecayedScore(ScoreState& s, uint32 nowMS) const
 void AntiCheatMgr::RecordViolation(Player* player, AntiCheatViolationType type,
                                    float weight, AntiCheatContext const& ctx)
 {
-    if (!m_enabled || !player || IsExempt(player))
+    if (!player)
+        return;
+    // m_testBypass lets `.cheat` simulations score on an exempt GM / with AC off.
+    if (!m_testBypass && (!m_enabled || IsExempt(player)))
         return;
     DoRecord(player, type, weight, ctx);
 }
