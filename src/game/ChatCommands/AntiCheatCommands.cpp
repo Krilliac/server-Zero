@@ -9,6 +9,7 @@
 #include "World.h"
 #include "ObjectMgr.h"
 #include "ObjectAccessor.h"
+#include "Map.h"
 #include "Log.h"
 #include "Config/Config.h"
 #include "Database/DatabaseEnv.h"
@@ -388,7 +389,62 @@ bool ChatHandler::HandleSpoofCommand(char* args)
         SendSysMessage("Runs on your target (or you). Bypasses GM-exempt/disabled so the result shows.");
         SendSysMessage("Legit versions use the real commands (.fly, .waterwalk, .modify speed) / spell");
         SendSysMessage("auras - those record a server grant so the AC does NOT flag them.");
+        SendSysMessage("Fleet test: .spoof bots <kind>|all [n] - make nearby PLAYERBOTS run the cheats.");
         if (!tok) { SetSentErrorMessage(true); return false; }
+        return true;
+    }
+
+    // Fleet red-team: drive PlayerBots (normally exempt + packetless) through real
+    // cheat signatures so the anti-cheat catches them - a live, watchable self-test.
+    if (kind == "bots")
+    {
+        char* subTok = strtok(NULL, " ");
+        std::string sub = subTok ? subTok : "all";
+        for (size_t i = 0; i < sub.size(); ++i) sub[i] = (char)tolower(sub[i]);
+        char* cTok = strtok(NULL, " ");
+        uint32 maxN = cTok ? uint32(atoi(cTok)) : 10;
+        if (maxN < 1) maxN = 1;
+        if (maxN > 200) maxN = 200;
+
+        Player* me = m_session ? m_session->GetPlayer() : NULL;
+        if (!me || !me->IsInWorld())
+        {
+            SendSysMessage(".spoof bots FAILED: must be run in-game.");
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint32 done = 0;
+        std::string desc;
+        sAntiCheatMgr->SetTestBypass(true);
+        Map::PlayerList const& players = me->GetMap()->GetPlayers();
+        for (Map::PlayerList::const_iterator it = players.begin(); it != players.end() && done < maxN; ++it)
+        {
+            Player* b = it->getSource();
+            if (!b || !b->IsInWorld())
+                continue;
+#ifdef ENABLE_PLAYERBOTS
+            if (!b->GetPlayerbotAI())
+                continue;
+#else
+            continue;
+#endif
+            if (sub == "all")
+                for (uint32 k = 0; k < kindCount; ++k)
+                    b->GetMovementAnticheat()->SimulateCheat(kinds[k], 0.0f, desc);
+            else
+                b->GetMovementAnticheat()->SimulateCheat(sub, 0.0f, desc);
+            ++done;
+        }
+        sAntiCheatMgr->SetTestBypass(false);
+
+        if (!done)
+        {
+            SendSysMessage(".spoof bots: no PlayerBots found on your map (or playerbots not built in).");
+            return true;
+        }
+        PSendSysMessage("Spoof: ran '%s' on %u PlayerBot(s) on your map. Use .anticheat top to see them ranked.",
+                        sub.c_str(), done);
         return true;
     }
 
