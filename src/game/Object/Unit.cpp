@@ -9570,6 +9570,13 @@ void Unit::UpdateSpeed(UnitMoveType mtype, bool forced, float ratio)
         {
             speed *= sWorld.getConfig(((Player*)this)->InBattleGround() ? CONFIG_FLOAT_GHOST_RUN_SPEED_BG : CONFIG_FLOAT_GHOST_RUN_SPEED_WORLD);
         }
+
+        // Movement subsystem: global player speed-rate knob (percent, default 100).
+        uint32 mvRate = sWorld.getConfig(CONFIG_UINT32_MOVEMENT_SPEED_RATE);
+        if (mvRate != 100)
+        {
+            speed *= float(mvRate) / 100.0f;
+        }
     }
 
     // Apply strongest slow aura mod to speed

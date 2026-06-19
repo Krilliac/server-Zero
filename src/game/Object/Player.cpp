@@ -537,6 +537,8 @@ Player::Player(WorldSession* session): Unit(), m_mover(this), m_camera(this), m_
 
     m_movementAnticheat = NULL;
     m_acPosTimer = 5000;
+    m_lastMoveRelayMs = 0;
+    m_lastMoveHeartbeatMs = 0;
 
     m_transport = 0;
 
@@ -1593,6 +1595,47 @@ void Player::Update(uint32 update_diff, uint32 p_time)
         else
         {
             m_acPosTimer -= update_diff;
+        }
+    }
+
+    // Movement smoothing (Movement.Smoothing, OFF by default): if this player was
+    // moving forward on the ground but their client has gone quiet (lag/packet loss),
+    // observers would see them freeze then warp. Inject extrapolated MSG_MOVE_HEARTBEAT
+    // packets — dead-reckoned along their current heading, capped to a short window —
+    // so nearby clients interpolate smoothly until real packets resume. Broadcast only;
+    // the server's authoritative position is NOT changed (the next real packet corrects).
+    if (sWorld.getConfig(CONFIG_BOOL_MOVEMENT_SMOOTHING) && IsInWorld() && GetSession() &&
+        !IsBeingTeleported() && !GetTransport() && m_lastMoveRelayMs)
+    {
+        uint32 now = getMSTime();
+        uint32 stale = getMSTimeDiff(m_lastMoveRelayMs, now);
+        uint32 maxExt = sWorld.getConfig(CONFIG_UINT32_MOVEMENT_MAX_EXTRAPOLATE_MS);
+        uint32 hbMs   = sWorld.getConfig(CONFIG_UINT32_MOVEMENT_HEARTBEAT_MS);
+
+        bool fwdGround = m_movementInfo.HasMovementFlag(MOVEFLAG_FORWARD) &&
+            !m_movementInfo.HasMovementFlag(MovementFlags(MOVEFLAG_FALLING | MOVEFLAG_FALLINGFAR |
+                MOVEFLAG_SWIMMING | MOVEFLAG_ONTRANSPORT | MOVEFLAG_FLYING | MOVEFLAG_CAN_FLY));
+
+        if (fwdGround && stale >= hbMs && stale <= maxExt &&
+            getMSTimeDiff(m_lastMoveHeartbeatMs, now) >= hbMs)
+        {
+            float o = GetOrientation();
+            float speed = GetSpeed(m_movementInfo.HasMovementFlag(MOVEFLAG_WALK_MODE) ? MOVE_WALK : MOVE_RUN);
+            float dt = float(stale) / 1000.0f;
+            float nx = GetPositionX() + cos(o) * speed * dt;
+            float ny = GetPositionY() + sin(o) * speed * dt;
+            float nz = GetMap()->GetHeight(nx, ny, GetPositionZ() + 2.0f);
+            if (nz < -50000.0f)
+                nz = GetPositionZ();
+
+            MovementInfo hb = m_movementInfo;
+            hb.ChangePosition(nx, ny, nz, o);
+            hb.UpdateTime(now);
+            WorldPacket data(MSG_MOVE_HEARTBEAT, 32);
+            data << GetPackGUID();
+            data << hb;
+            SendMessageToSetExcept(&data, this);
+            m_lastMoveHeartbeatMs = now;
         }
     }
 

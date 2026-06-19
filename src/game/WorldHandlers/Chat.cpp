@@ -280,6 +280,14 @@ ChatCommand* ChatHandler::getCommandTable()
         { NULL,             0,                  false, NULL,                                                "", NULL }
     };
 
+    static ChatCommand movementCommandTable[] =
+    {
+        { "status",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleMovementStatusCommand,           "", NULL },
+        { "config",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleMovementConfigCommand,           "", NULL },
+        { "set",            SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleMovementSetCommand,              "", NULL },
+        { NULL,             0,                  false, NULL,                                                "", NULL }
+    };
+
     static ChatCommand debugCommandTable[] =
     {
         { "vis",            SEC_GAMEMASTER,     false, NULL,                                                "", debugVisCommandTable },
@@ -801,6 +809,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "anticheat",      SEC_GAMEMASTER,     true,  NULL,                                           "", anticheatCommandTable},
         { "spoof",          SEC_GAMEMASTER,     true,  &ChatHandler::HandleSpoofCommand,                "", NULL                 },
         { "timesync",       SEC_GAMEMASTER,     true,  NULL,                                           "", timesyncCommandTable },
+        { "movement",       SEC_GAMEMASTER,     true,  NULL,                                           "", movementCommandTable },
         { "cast",           SEC_ADMINISTRATOR,  false, NULL,                                           "", castCommandTable     },
         { "character",      SEC_GAMEMASTER,     true,  NULL,                                           "", characterCommandTable},
         { "debug",          SEC_MODERATOR,      true,  NULL,                                           "", debugCommandTable    },

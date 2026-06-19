@@ -971,6 +971,12 @@ void World::LoadConfigSettings(bool reload)
     // the server clock so observers interpolate other players on one timebase.
     // Higher-risk movement netcode — OFF by default for A/B testing.
     setConfig(CONFIG_BOOL_TIMESYNC_MOVE_CORRECTION, "TimeSync.MovementCorrection", false);
+    // Movement subsystem: other-player smoothing (heartbeat extrapolation for stale
+    // movers, A/B netcode so OFF by default) + a global player speed-rate knob.
+    setConfig(CONFIG_BOOL_MOVEMENT_SMOOTHING,       "Movement.Smoothing", false);
+    setConfigMinMax(CONFIG_UINT32_MOVEMENT_HEARTBEAT_MS,      "Movement.HeartbeatMs", 250, 100, 2000);
+    setConfigMinMax(CONFIG_UINT32_MOVEMENT_MAX_EXTRAPOLATE_MS,"Movement.MaxExtrapolateMs", 400, 100, 3000);
+    setConfigMinMax(CONFIG_UINT32_MOVEMENT_SPEED_RATE,       "Movement.PlayerSpeedRate", 100, 10, 1000);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.

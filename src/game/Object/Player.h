@@ -4048,6 +4048,15 @@ class Player : public Unit
         MovementAnticheat* m_movementAnticheat;
         uint32 m_acPosTimer;   // countdown for periodic idle-position re-validation
 
+    public:
+        // Movement smoothing: server time of the last real movement packet relayed
+        // for this player (set by the movement opcode handler). Used to detect a
+        // "stale" mover and inject extrapolated heartbeats to nearby observers.
+        void SetLastMoveRelayMs(uint32 t) { m_lastMoveRelayMs = t; m_lastMoveHeartbeatMs = 0; }
+    private:
+        uint32 m_lastMoveRelayMs;
+        uint32 m_lastMoveHeartbeatMs;
+
 #ifdef ENABLE_PLAYERBOTS
         // Player bot AI
         PlayerbotAI* m_playerbotAI;

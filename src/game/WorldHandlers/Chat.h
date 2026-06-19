@@ -272,6 +272,9 @@ class ChatHandler
         bool HandleTimeSyncResyncCommand(char* args);
         bool HandleTimeSyncSkipCommand(char* args);
         bool HandleTimeSyncDesyncCommand(char* args);
+        bool HandleMovementStatusCommand(char* args);
+        bool HandleMovementConfigCommand(char* args);
+        bool HandleMovementSetCommand(char* args);
         bool HandleSpoofCommand(char* args);
 
         // Server-side debug visualization commands
