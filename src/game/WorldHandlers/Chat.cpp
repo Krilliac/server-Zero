@@ -258,6 +258,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "top",            SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatTopCommand,             "", NULL },
         { "report",         SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatReportCommand,          "", NULL },
         { "reload",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatReloadCommand,          "", NULL },
+        { "set",            SEC_ADMINISTRATOR,  false, &ChatHandler::HandleAntiCheatSetCommand,             "", NULL },
         { "warn",           SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatWarnCommand,            "", NULL },
         { "jail",           SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatJailCommand,            "", NULL },
         { "unjail",         SEC_GAMEMASTER,     false, &ChatHandler::HandleAntiCheatUnjailCommand,          "", NULL },

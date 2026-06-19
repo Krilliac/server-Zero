@@ -107,6 +107,54 @@ bool ChatHandler::HandleAntiCheatReloadCommand(char* /*args*/)
     return true;
 }
 
+bool ChatHandler::HandleAntiCheatSetCommand(char* args)
+{
+    char* f = strtok(args, " ");
+    char* v = strtok(NULL, " ");
+    if (!f || !v)
+    {
+        SendSysMessage(".anticheat set FAILED. Usage: .anticheat set <field> <value>. Fields:");
+        SendSysMessage("  bool: enable, movement, physics, accelcheck, exemptbots, persist, autoban");
+        SendSysMessage("  uint: action(1-4), warn, rubberband, kick, decay, speedtol, teledist,");
+        SendSysMessage("        castburst, accelmult, exemptgm");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    std::string field = f;
+    for (size_t i = 0; i < field.size(); ++i) field[i] = (char)tolower(field[i]);
+    uint32 val = uint32(atoi(v));
+
+    if      (field == "enable")     sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_ENABLE, val != 0);
+    else if (field == "movement")   sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_MOVEMENT, val != 0);
+    else if (field == "physics")    sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_PHYSICS, val != 0);
+    else if (field == "accelcheck") sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_ACCEL_CHECK, val != 0);
+    else if (field == "exemptbots") sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_EXEMPT_BOTS, val != 0);
+    else if (field == "persist")    sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_PERSIST, val != 0);
+    else if (field == "autoban")    sWorld.setConfig(CONFIG_BOOL_AC_AUTOBAN_ENABLE, val != 0);
+    else if (field == "action")     sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_ACTION, val);
+    else if (field == "warn")       sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_SCORE_WARN, val);
+    else if (field == "rubberband") sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_SCORE_RUBBER, val);
+    else if (field == "kick")       sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_SCORE_KICK, val);
+    else if (field == "decay")      sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_DECAY, val);
+    else if (field == "speedtol")   sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_SPEED_TOL, val);
+    else if (field == "teledist")   sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_TELE_DIST, val);
+    else if (field == "castburst")  sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_CAST_BURST, val);
+    else if (field == "accelmult")  sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_ACCEL_MULT, val);
+    else if (field == "exemptgm")   sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_EXEMPT_GM, val);
+    else
+    {
+        PSendSysMessage(".anticheat set FAILED: unknown field '%s'.", field.c_str());
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    // Refresh the manager's cached config snapshot so the change takes effect now.
+    sAntiCheatMgr->LoadConfig();
+    PSendSysMessage("AntiCheat: set %s = %u (runtime; reverts on restart/reload from file).",
+                    field.c_str(), val);
+    return true;
+}
+
 bool ChatHandler::HandleAntiCheatWarnCommand(char* /*args*/)
 {
     Player* target = getSelectedPlayer();
