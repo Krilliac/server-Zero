@@ -316,6 +316,25 @@ void WorldSession::HandleGameObjectUseOpcode(WorldPacket& recv_data)
 
     if (!obj->IsWithinDistInMap(_player, obj->GetInteractionDistance()))
     {
+        // Anti-Cheat: the core already blocks this use, but a request well beyond
+        // the object's interaction distance is a remote-interact attempt worth
+        // scoring (a legit client never sends one). Generous slack vs latency so a
+        // moving/laggy player at the edge isn't flagged.
+        if (sAntiCheatMgr->IsEnabled() && !sAntiCheatMgr->IsExempt(_player))
+        {
+            uint32 lat = GetLatencyEWMA();
+            float slack = obj->GetInteractionDistance() + 8.0f
+                        + _player->GetSpeed(MOVE_RUN) * (float(lat) / 1000.0f);
+            if (_player->GetDistance(obj) > slack)
+            {
+                AntiCheatContext ctx;
+                ctx.mapId = _player->GetMapId();
+                ctx.x = _player->GetPositionX(); ctx.y = _player->GetPositionY(); ctx.z = _player->GetPositionZ();
+                ctx.latency = lat;
+                ctx.detail = "gameobject use beyond interaction distance";
+                sAntiCheatMgr->RecordViolation(_player, AC_VIOLATION_INTERACT, 15.0f, ctx);
+            }
+        }
         return;
     }
 

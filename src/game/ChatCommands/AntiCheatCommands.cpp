@@ -264,6 +264,7 @@ namespace
         { "packettiming", AC_VIOLATION_PACKETTIMING },
         { "spell",        AC_VIOLATION_SPELL },
         { "item",         AC_VIOLATION_ITEM },
+        { "interact",     AC_VIOLATION_INTERACT },
     };
 }
 
