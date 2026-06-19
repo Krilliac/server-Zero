@@ -977,6 +977,10 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_MOVEMENT_HEARTBEAT_MS,      "Movement.HeartbeatMs", 250, 100, 2000);
     setConfigMinMax(CONFIG_UINT32_MOVEMENT_MAX_EXTRAPOLATE_MS,"Movement.MaxExtrapolateMs", 400, 100, 3000);
     setConfigMinMax(CONFIG_UINT32_MOVEMENT_SPEED_RATE,       "Movement.PlayerSpeedRate", 100, 10, 1000);
+    // Per-move-type multipliers (percent) applied on top of PlayerSpeedRate.
+    setConfigMinMax(CONFIG_UINT32_MOVEMENT_RUN_RATE,         "Movement.RunSpeedRate", 100, 10, 1000);
+    setConfigMinMax(CONFIG_UINT32_MOVEMENT_SWIM_RATE,        "Movement.SwimSpeedRate", 100, 10, 1000);
+    setConfigMinMax(CONFIG_UINT32_MOVEMENT_WALK_RATE,        "Movement.WalkSpeedRate", 100, 10, 1000);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.

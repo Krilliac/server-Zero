@@ -1612,30 +1612,44 @@ void Player::Update(uint32 update_diff, uint32 p_time)
         uint32 maxExt = sWorld.getConfig(CONFIG_UINT32_MOVEMENT_MAX_EXTRAPOLATE_MS);
         uint32 hbMs   = sWorld.getConfig(CONFIG_UINT32_MOVEMENT_HEARTBEAT_MS);
 
-        bool fwdGround = m_movementInfo.HasMovementFlag(MOVEFLAG_FORWARD) &&
-            !m_movementInfo.HasMovementFlag(MovementFlags(MOVEFLAG_FALLING | MOVEFLAG_FALLINGFAR |
-                MOVEFLAG_SWIMMING | MOVEFLAG_ONTRANSPORT | MOVEFLAG_FLYING | MOVEFLAG_CAN_FLY));
+        uint32 mflags = m_movementInfo.GetMovementFlags();
+        bool ground = !(mflags & (MOVEFLAG_FALLING | MOVEFLAG_FALLINGFAR | MOVEFLAG_SWIMMING |
+                                  MOVEFLAG_ONTRANSPORT | MOVEFLAG_FLYING | MOVEFLAG_CAN_FLY));
+        bool moving = (mflags & (MOVEFLAG_FORWARD | MOVEFLAG_BACKWARD |
+                                 MOVEFLAG_STRAFE_LEFT | MOVEFLAG_STRAFE_RIGHT)) != 0;
 
-        if (fwdGround && stale >= hbMs && stale <= maxExt &&
+        if (ground && moving && stale >= hbMs && stale <= maxExt &&
             getMSTimeDiff(m_lastMoveHeartbeatMs, now) >= hbMs)
         {
-            float o = GetOrientation();
-            float speed = GetSpeed(m_movementInfo.HasMovementFlag(MOVEFLAG_WALK_MODE) ? MOVE_WALK : MOVE_RUN);
-            float dt = float(stale) / 1000.0f;
-            float nx = GetPositionX() + cos(o) * speed * dt;
-            float ny = GetPositionY() + sin(o) * speed * dt;
-            float nz = GetMap()->GetHeight(nx, ny, GetPositionZ() + 2.0f);
-            if (nz < -50000.0f)
-                nz = GetPositionZ();
+            // Resolve the actual movement direction from the keypress flags in the
+            // body-local frame (x = forward, y = left), then rotate into world space.
+            float lx = 0.0f, ly = 0.0f;
+            if (mflags & MOVEFLAG_FORWARD)      lx += 1.0f;
+            if (mflags & MOVEFLAG_BACKWARD)     lx -= 1.0f;
+            if (mflags & MOVEFLAG_STRAFE_LEFT)  ly += 1.0f;
+            if (mflags & MOVEFLAG_STRAFE_RIGHT) ly -= 1.0f;
+            if (lx != 0.0f || ly != 0.0f)
+            {
+                float o = GetOrientation();
+                float dir = o + atan2(ly, lx);
+                float speed = (mflags & MOVEFLAG_WALK_MODE) ? GetSpeed(MOVE_WALK)
+                            : (lx < 0.0f ? GetSpeed(MOVE_RUN_BACK) : GetSpeed(MOVE_RUN));
+                float dt = float(stale) / 1000.0f;
+                float nx = GetPositionX() + cos(dir) * speed * dt;
+                float ny = GetPositionY() + sin(dir) * speed * dt;
+                float nz = GetMap()->GetHeight(nx, ny, GetPositionZ() + 2.0f);
+                if (nz < -50000.0f)
+                    nz = GetPositionZ();
 
-            MovementInfo hb = m_movementInfo;
-            hb.ChangePosition(nx, ny, nz, o);
-            hb.UpdateTime(now);
-            WorldPacket data(MSG_MOVE_HEARTBEAT, 32);
-            data << GetPackGUID();
-            data << hb;
-            SendMessageToSetExcept(&data, this);
-            m_lastMoveHeartbeatMs = now;
+                MovementInfo hb = m_movementInfo;
+                hb.ChangePosition(nx, ny, nz, o);
+                hb.UpdateTime(now);
+                WorldPacket data(MSG_MOVE_HEARTBEAT, 32);
+                data << GetPackGUID();
+                data << hb;
+                SendMessageToSetExcept(&data, this);
+                m_lastMoveHeartbeatMs = now;
+            }
         }
     }
 
