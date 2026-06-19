@@ -953,6 +953,9 @@ void World::LoadConfigSettings(bool reload)
     // speed increase beyond allowed-speed * this multiplier per second.
     setConfig(CONFIG_BOOL_ANTICHEAT_ACCEL_CHECK,    "AntiCheat.AccelCheck", false);
     setConfigMinMax(CONFIG_UINT32_ANTICHEAT_ACCEL_MULT, "AntiCheat.AccelMaxMult", 6, 2, 50);
+    // Bot-movement heuristic (snap-to-waypoint + metronomic packet timing over a
+    // 30s window). Heuristic/FP-prone, so OFF by default.
+    setConfig(CONFIG_BOOL_ANTICHEAT_BOT_DETECT,     "AntiCheat.BotDetect", false);
     setConfig(CONFIG_BOOL_TIMESYNC_ENABLE,          "TimeSync.Enable", true);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_ALPHA,   "TimeSync.EWMA.Alpha", 20, 1, 100);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_DESYNC,  "TimeSync.Desync.Threshold", 1000, 100, 60000);

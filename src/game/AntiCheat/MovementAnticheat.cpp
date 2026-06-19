@@ -67,7 +67,10 @@ MovementAnticheat::MovementAnticheat(Player* owner)
       m_castWinStartMS(0), m_castCount(0),
       m_hasAckTime(false), m_lastAckTime(0),
       m_hasKin(false), m_lastSpeed(0.f),
-      m_grantedFlags(0)
+      m_grantedFlags(0),
+      m_botWinStartMS(0), m_botSamples(0), m_botCleanCycles(0), m_botRunDist(0.f),
+      m_botHasHeading(false), m_botLastHeading(0.f),
+      m_botHasPkt(false), m_botLastPktMS(0), m_botIntervalN(0), m_botIntMean(0.f), m_botIntM2(0.f)
 {
 }
 
@@ -435,6 +438,70 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
     {
         // Grounded: keep the apex tracking current so the next fall measures from here.
         m_fallApexZ = pos->z;
+    }
+
+    // --- Detector: bot-like movement (snap-to-waypoint + metronomic timing) ---
+    // Classic third-party bots path in straight lines between waypoints, turning
+    // SHARPLY at each node, on a metronomic clock. Humans wander and have jittery
+    // timing. Accumulated over a 30s window so a one-off human sharp turn (e.g. a
+    // both-mouse-button look-behind flip) can't trip it — only a sustained, repeated,
+    // regular pattern does. Config-gated (heuristic), OFF by default.
+    if (sWorld.getConfig(CONFIG_BOOL_ANTICHEAT_BOT_DETECT) && state != AC_MOVE_TRANSPORT)
+    {
+        if (m_botWinStartMS == 0)
+            m_botWinStartMS = nowMS;
+
+        // Inter-packet timing regularity (Welford running variance).
+        if (m_botHasPkt)
+        {
+            float iv = float(getMSTimeDiff(m_botLastPktMS, nowMS));
+            ++m_botIntervalN;
+            float d = iv - m_botIntMean;
+            m_botIntMean += d / float(m_botIntervalN);
+            m_botIntM2 += d * (iv - m_botIntMean);
+        }
+        m_botLastPktMS = nowMS; m_botHasPkt = true;
+
+        if (horiz > 1.0f)
+        {
+            ++m_botSamples;
+            const float PI_F = 3.14159265f;
+            float heading = atan2f(dy, dx);
+            if (m_botHasHeading)
+            {
+                float turn = fabs(heading - m_botLastHeading);
+                if (turn > PI_F) turn = 2.0f * PI_F - turn;   // normalise to 0..pi
+                if (turn > 1.4f)            // ~80deg: a sharp "snap"
+                {
+                    // a snap that ended a sustained straight run = waypoint cycle
+                    if (m_botRunDist >= 15.0f) ++m_botCleanCycles;
+                    m_botRunDist = 0.0f;
+                }
+                else if (turn < 0.35f)      // ~20deg: still a straight line
+                    m_botRunDist += horiz;
+                else
+                    m_botRunDist = 0.0f;     // gentle curve, not a clean straight run
+            }
+            m_botLastHeading = heading; m_botHasHeading = true;
+        }
+
+        if (getMSTimeDiff(m_botWinStartMS, nowMS) >= 30000)
+        {
+            if (m_botSamples >= 50 && m_botIntervalN >= 30)
+            {
+                float var = m_botIntM2 / float(m_botIntervalN);
+                float sd = sqrtf(var > 0.0f ? var : 0.0f);
+                float cv = m_botIntMean > 1.0f ? sd / m_botIntMean : 1.0f;
+                // bot = repeated clean snap->straight cycles AND metronomic timing
+                if (m_botCleanCycles >= 4 && cv < 0.15f)
+                {
+                    ctx.detail = "bot-like movement (snap-to-waypoint + regular timing)";
+                    sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_BOT, 12.0f, ctx);
+                }
+            }
+            m_botWinStartMS = nowMS; m_botSamples = 0; m_botCleanCycles = 0; m_botRunDist = 0.0f;
+            m_botIntervalN = 0; m_botIntMean = 0.0f; m_botIntM2 = 0.0f;
+        }
     }
 
     // Update the rolling baseline. Track last clean position for rubberband use

@@ -30,6 +30,7 @@ enum AntiCheatViolationType
     AC_VIOLATION_SPELL           = 11,  // cast of a spell the player does not have (injection)
     AC_VIOLATION_ITEM            = 12,  // illegitimate item use (e.g. using an item in the trade window)
     AC_VIOLATION_INTERACT        = 13,  // interaction beyond range (remote loot/use/interact attempt)
+    AC_VIOLATION_BOT             = 14,  // bot-like movement (snap-to-waypoint + metronomic timing)
 
     AC_VIOLATION_MAX
 };

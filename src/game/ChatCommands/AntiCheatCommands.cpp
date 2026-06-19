@@ -265,6 +265,7 @@ namespace
         { "spell",        AC_VIOLATION_SPELL },
         { "item",         AC_VIOLATION_ITEM },
         { "interact",     AC_VIOLATION_INTERACT },
+        { "bot",          AC_VIOLATION_BOT },
     };
 }
 

@@ -148,6 +148,19 @@ class MovementAnticheat
         // Server-granted movement capability flags (water-walk/hover/etc.) — the
         // flag-spoof detectors accept these as legitimate alongside auras.
         uint32 m_grantedFlags;
+
+        // Bot-movement heuristic (snap-to-waypoint + metronomic timing), windowed.
+        uint32 m_botWinStartMS;
+        uint32 m_botSamples;       // moving packets this window
+        uint32 m_botCleanCycles;   // snap-after-straight-run cycles this window
+        float  m_botRunDist;       // current straight-run distance since last snap
+        bool   m_botHasHeading;
+        float  m_botLastHeading;
+        bool   m_botHasPkt;
+        uint32 m_botLastPktMS;
+        uint32 m_botIntervalN;     // inter-packet interval count (Welford)
+        float  m_botIntMean;
+        float  m_botIntM2;
 };
 
 #endif // MANGOS_ANTICHEAT_MOVEMENTANTICHEAT_H
