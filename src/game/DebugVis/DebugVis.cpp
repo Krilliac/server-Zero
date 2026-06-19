@@ -33,7 +33,7 @@ namespace
         uint32 prim, alt2; const char* key;
         switch (cat)
         {
-            case DebugVis::DV_CELL:      key = "DebugVis.Disp.Cell";      prim = 2971; alt2 = 5811; break; // blue   power crystal / dark crystal
+            case DebugVis::DV_CELL:      key = "DebugVis.Disp.Cell";      prim = 5912; alt2 = 5811; break; // WSG (silverwing) flag - small, clean grid marker
             case DebugVis::DV_LOS_OK:    key = "DebugVis.Disp.LosOk";     prim = 2972; alt2 = 6431; break; // green  power crystal / glyphed crystal
             case DebugVis::DV_LOS_BLOCK: key = "DebugVis.Disp.LosBlock";  prim = 2973; alt2 = 6573; break; // red    power crystal / red crystal
             case DebugVis::DV_PATH:      key = "DebugVis.Disp.Path";      prim = 2972; alt2 = 6431; break; // green  power crystal / glyphed crystal
@@ -56,7 +56,7 @@ namespace
         uint32 def; const char* key;
         switch (cat)
         {
-            case DebugVis::DV_CELL:      key = "DebugVis.GlowDisp.Cell";      def = 263;  break; // blue column
+            case DebugVis::DV_CELL:      key = "DebugVis.GlowDisp.Cell";      def = 0;    break; // none: the WSG flag is the cell marker (no tall column)
             case DebugVis::DV_LOS_OK:    key = "DebugVis.GlowDisp.LosOk";     def = 3993; break; // green column
             case DebugVis::DV_LOS_BLOCK: key = "DebugVis.GlowDisp.LosBlock";  def = 327;  break; // red
             case DebugVis::DV_PATH:      key = "DebugVis.GlowDisp.Path";      def = 3993; break; // green column

@@ -42,9 +42,12 @@ bool ChatHandler::HandleDebugVisCellsCommand(char* args)
         {
             float wx = baseX + i * cell;
             float wy = baseY + j * cell;
-            float wz = map->GetHeight(wx, wy, player->GetPositionZ() + 5.0f);
+            // Search ground from well above the player's elevation so distant cells
+            // snap to real terrain; skip cells with no ground beneath (was placing
+            // markers at the player's Z, which left them floating in mid-air).
+            float wz = map->GetHeight(wx, wy, player->GetPositionZ() + 50.0f);
             if (wz < -50000.0f)
-                wz = player->GetPositionZ();
+                continue;
             char lbl[160];
             snprintf(lbl, sizeof(lbl), "DebugVis CELL [%+d,%+d]\n(%.1f, %.1f, %.1f)  ground Z=%.1f",
                      i, j, wx, wy, wz, wz);
