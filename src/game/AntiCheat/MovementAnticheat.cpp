@@ -11,6 +11,7 @@
 #include "World.h"
 #include "Unit.h"
 #include "SpellAuraDefines.h"
+#include "Map.h"
 #include "Opcodes.h"
 #include "Timer.h"
 #include "Log.h"
@@ -29,6 +30,7 @@ namespace
     const uint32 SKIP_MAX_PER_WINDOW = 10;     // legit clients rarely skip this often
     const uint32 CAST_WINDOW_MS      = 1000;   // cast-spam counting window
     const uint32 CAST_GCD_SLACK_MS   = 150;    // tolerance below GCD on top of latency
+    const float  NOCLIP_MIN_STEP     = 4.0f;   // min ground step (yd) to run the LoS no-clip test
 }
 
 MovementAnticheat::MovementAnticheat(Player* owner)
@@ -246,9 +248,10 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
     // clear horizontal step while UNIT_STAT_ROOT is set is a root-break hack.
     // Restricted to grounded, non-flagged packets to exclude knockback/transport.
     if (state == AC_MOVE_GROUND && horiz > 3.0f && !cheapTrip &&
-        m_player->hasUnitState(UNIT_STAT_ROOT))
+        m_player->hasUnitState(UNIT_STAT_ROOT | UNIT_STAT_STUNNED))
     {
-        ctx.detail = "horizontal movement while rooted";
+        // Fear/confuse are server-driven movement, so only root/stun are judged.
+        ctx.detail = "horizontal movement while rooted/stunned";
         sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 20.0f, ctx);
         cheapTrip = true;
     }
@@ -311,6 +314,25 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
         {
             ctx.detail = reason ? reason : "physics suspect";
             sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 10.0f, ctx);
+        }
+    }
+
+    // --- Detector: wall-clip / no-clip (moved through solid geometry) ---
+    // A legitimate step keeps line-of-sight between the previous and the new
+    // position; a sizable ground step with NO LoS between them means the client
+    // walked through world geometry. VMap query, so gated behind the physics
+    // module + a step floor (bounds cost and corner false-positives). Skipped
+    // right after a server relocation and when another detector already tripped.
+    if (sAntiCheatMgr->PhysicsEnabled() && m_hasLast && !m_trustNext && !cheapTrip &&
+        state == AC_MOVE_GROUND && horiz > NOCLIP_MIN_STEP)
+    {
+        Map* map = m_player->GetMap();
+        if (map && !map->IsInLineOfSight(m_lastX, m_lastY, m_lastZ + 1.5f,
+                                         pos->x, pos->y, pos->z + 1.5f))
+        {
+            ctx.detail = "moved through geometry (no-clip)";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 15.0f, ctx);
+            cheapTrip = true;
         }
     }
 
