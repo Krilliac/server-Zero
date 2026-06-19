@@ -406,28 +406,21 @@ bool ChatHandler::HandleSpoofCommand(char* args)
         if (maxN < 1) maxN = 1;
         if (maxN > 200) maxN = 200;
 
-        Player* me = m_session ? m_session->GetPlayer() : NULL;
-        if (!me || !me->IsInWorld())
-        {
-            SendSysMessage(".spoof bots FAILED: must be run in-game.");
-            SetSentErrorMessage(true);
-            return false;
-        }
-
+        // Iterate ALL online players (works from in-game, the server console, and
+        // SOAP — all of which run the command on the world thread). Drives the
+        // PlayerBots through real cheat signatures so the AC scores them.
         uint32 done = 0;
         std::string desc;
         sAntiCheatMgr->SetTestBypass(true);
-        Map::PlayerList const& players = me->GetMap()->GetPlayers();
-        for (Map::PlayerList::const_iterator it = players.begin(); it != players.end() && done < maxN; ++it)
+        sObjectAccessor.DoForAllPlayers([&](Player* b)
         {
-            Player* b = it->getSource();
-            if (!b || !b->IsInWorld())
-                continue;
+            if (done >= maxN || !b || !b->IsInWorld())
+                return;
 #ifdef ENABLE_PLAYERBOTS
             if (!b->GetPlayerbotAI())
-                continue;
+                return;
 #else
-            continue;
+            return;
 #endif
             if (sub == "all")
                 for (uint32 k = 0; k < kindCount; ++k)
@@ -435,15 +428,15 @@ bool ChatHandler::HandleSpoofCommand(char* args)
             else
                 b->GetMovementAnticheat()->SimulateCheat(sub, 0.0f, desc);
             ++done;
-        }
+        });
         sAntiCheatMgr->SetTestBypass(false);
 
         if (!done)
         {
-            SendSysMessage(".spoof bots: no PlayerBots found on your map (or playerbots not built in).");
+            SendSysMessage(".spoof bots: no PlayerBots online (or playerbots not built in).");
             return true;
         }
-        PSendSysMessage("Spoof: ran '%s' on %u PlayerBot(s) on your map. Use .anticheat top to see them ranked.",
+        PSendSysMessage("Spoof: ran '%s' on %u PlayerBot(s). Use .anticheat top to see them ranked.",
                         sub.c_str(), done);
         return true;
     }
