@@ -2614,7 +2614,7 @@ Creature* WorldObject::SummonCreature(uint32 id, float x, float y, float z, floa
  * @param despwtime The despawn time in milliseconds.
  * @return The summoned game object, or null on failure.
  */
-GameObject* WorldObject::SummonGameObject(uint32 id, float x, float y, float z, float angle, uint32 despwtime, uint32 displayId)
+GameObject* WorldObject::SummonGameObject(uint32 id, float x, float y, float z, float angle, uint32 despwtime, uint32 displayId, float scale)
 {
     GameObject* pGameObj = new GameObject;
 
@@ -2638,6 +2638,8 @@ GameObject* WorldObject::SummonGameObject(uint32 id, float x, float y, float z, 
     // the create packet carries the right display id.
     if (displayId)
         pGameObj->SetDisplayId(displayId);
+    if (scale > 0.0f)
+        pGameObj->SetObjectScale(scale);
 
     map->Add(pGameObj);
     pGameObj->AIM_Initialize();

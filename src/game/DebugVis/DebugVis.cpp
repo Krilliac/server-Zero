@@ -70,6 +70,19 @@ namespace
         return uint32(sConfig.GetIntDefault(key, int32(def)));
     }
 
+    // Per-category marker scale. Some models (the collision/hit crystals) render
+    // much larger than the rest; shrink those so the line/impact markers aren't
+    // oversized. Overridable via config.
+    float MarkerScale(DebugVis::Category cat)
+    {
+        switch (cat)
+        {
+            case DebugVis::DV_COLLISION: return sConfig.GetFloatDefault("DebugVis.Scale.Collision", 0.5f);
+            case DebugVis::DV_HITPOINT:  return sConfig.GetFloatDefault("DebugVis.Scale.HitPoint", 0.6f);
+            default:                     return sConfig.GetFloatDefault("DebugVis.Scale", 1.0f);
+        }
+    }
+
     // entry -> per-instance tooltip text for spawned pool markers. Touched only
     // from the world/session thread (command handlers + GO-query handler), so no
     // locking needed. Bounded to the pool size (ring reuse overwrites).
@@ -136,6 +149,7 @@ namespace DebugVis
 
         uint32 despawnMs = DespawnSeconds() * IN_MILLISECONDS;
         float ori = viewer->GetOrientation();
+        float scale = MarkerScale(cat);
         ObjectGuid owner = viewer->GetObjectGuid();
         bool placed = false;
 
@@ -146,8 +160,9 @@ namespace DebugVis
         {
             uint32 glow = GlowDisplayId(cat);
             if (glow)
-                if (GameObject* g = viewer->SummonGameObject(SharedFillEntry(), x, y, z, ori, despawnMs, glow))
+                if (GameObject* g = viewer->SummonGameObject(SharedFillEntry(), x, y, z, ori, despawnMs, glow, scale))
                 {
+                    g->SetSpawnedByDefault(false);   // honour the despawn timer
                     MarkerOwners()[owner].push_back(g->GetObjectGuid());
                     placed = true;
                 }
@@ -156,8 +171,9 @@ namespace DebugVis
         // Clickable crystal — the hover target. Labeled markers each take a distinct
         // pool entry (per-instance tooltip); unlabeled ones share a single entry.
         uint32 entry = label.empty() ? SharedFillEntry() : NextLabeledEntry(label);
-        if (GameObject* go = viewer->SummonGameObject(entry, x, y, z, ori, despawnMs, ColorDisplayId(cat)))
+        if (GameObject* go = viewer->SummonGameObject(entry, x, y, z, ori, despawnMs, ColorDisplayId(cat), scale))
         {
+            go->SetSpawnedByDefault(false);   // honour the despawn timer
             MarkerOwners()[owner].push_back(go->GetObjectGuid());
             placed = true;
         }
