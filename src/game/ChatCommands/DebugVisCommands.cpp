@@ -133,6 +133,12 @@ bool ChatHandler::HandleDebugVisPathCommand(char* /*args*/)
     uint32 idx = 0;
     for (PointsArray::const_iterator it = pts.begin(); it != pts.end(); ++it, ++idx)
     {
+        // Skip the path point on/next to the player — markers are solid and would
+        // trap the caster inside the object.
+        float pdx = it->x - player->GetPositionX();
+        float pdy = it->y - player->GetPositionY();
+        if (pdx * pdx + pdy * pdy < 9.0f)   // within ~3 yd
+            continue;
         char lbl[176];
         snprintf(lbl, sizeof(lbl),
                  "DebugVis PATH pt %u/%u\n(%.1f, %.1f, %.1f)\ntype=0x%X (%s)",

@@ -222,15 +222,25 @@ namespace DebugVis
         if (steps > 200) // safety cap so a long ray can't flood the world
             steps = 200;
 
+        // Don't drop a marker on (or right next to) the caster — markers are solid
+        // and would trap the player inside the object. Skip the first few yards.
+        const float MIN_FROM_START = 3.0f;
+
         uint32 placed = 0;
+        bool labelUsed = false;
         for (uint32 i = 0; i <= steps; ++i)
         {
             float t = steps ? float(i) / float(steps) : 0.0f;
-            // Only the first dot carries the (optional) verbose tooltip; the rest
-            // are unlabeled fill so we don't burn the whole ring on one ray.
-            const std::string& dotLabel = (i == 0) ? label : std::string();
+            if (len * t < MIN_FROM_START)
+                continue;                       // skip dots on/next to the caster
+            // The first PLACED dot (out along the line) carries the verbose tooltip;
+            // the rest are unlabeled fill so we don't burn the whole ring on one ray.
+            std::string dotLabel = labelUsed ? std::string() : label;
             if (Marker(viewer, cat, x1 + dx * t, y1 + dy * t, z1 + dz * t, dotLabel))
+            {
                 ++placed;
+                labelUsed = true;
+            }
         }
         return placed;
     }
