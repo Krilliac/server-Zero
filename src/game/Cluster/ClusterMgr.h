@@ -18,10 +18,29 @@
 
 #include <string>
 #include <map>
+#include <deque>
+#include <vector>
 #include <mutex>
 
 class Player;
 class MovementInfo;
+class ByteBuffer;
+class ClusterThread;
+
+// A live peer node this node may connect to (Phase 2 transport).
+struct ClusterPeer
+{
+    uint32      nodeId;
+    std::string host;
+    uint32      port;   // inter-node (peer) port
+};
+
+// A queued outbound frame. target==0 means broadcast to all connected peers.
+struct ClusterOutFrame
+{
+    uint32             target;
+    std::vector<uint8> bytes;
+};
 
 class ClusterMgr
 {
@@ -57,9 +76,16 @@ class ClusterMgr
         uint32 GetLocalPlayerCount() const;       // players currently owned by this node
         uint32 GetOptimalNode();                  // least-loaded online node (login routing)
 
-        // Phase 1: gated no-op. Phase 2 serializes + sends the move to peer nodes
-        // so players on other nodes can see this mover.
+        // Phase 2: serialize the move and enqueue it for broadcast to peer nodes
+        // so players on other nodes can see this mover. Enqueue-only (safe to call
+        // from map threads); the network thread does the actual send.
         void   RelayMovement(Player* mover, uint16 opcode, MovementInfo const& mi);
+
+        // --- Phase 2: inter-node transport bridge (called by ClusterThread) ---
+        bool PopOutbound(std::vector<ClusterOutFrame>& out);          // net thread: drain send queue
+        void GetPeers(std::vector<ClusterPeer>& out);                 // net thread: current peer list
+        void PushInbound(uint8 type, const uint8* data, uint32 len);  // net thread: queue an rx frame
+        void OnPeerHeartbeat(uint32 nodeId);                          // net thread: note peer liveness
 
     private:
         ClusterMgr();
@@ -70,17 +96,33 @@ class ClusterMgr
         void Heartbeat();        // refresh last_heartbeat + player_count
         void MarkStaleOffline(); // flip peers that missed heartbeats to 'offline'
 
+        void RefreshPeers();     // world thread: rebuild m_peers from cluster_nodes
+        void DrainInbound();     // world thread: process queued inbound frames
+        void EnqueueBroadcast(ByteBuffer const& frame); // queue a wire frame for all peers
+
         bool        m_enabled;
         uint32      m_nodeId;
         uint32      m_port;
+        uint32      m_peerPort;  // inter-node listen/connect port
         uint32      m_capacity;
         uint32      m_heartbeatSec;
         std::string m_host;
+
+        ClusterThread* m_net;    // dedicated network thread (NULL when disabled)
 
         // guidLow -> owning nodeId for players currently on this node. Touched from
         // map threads (RegisterPlayer) and the main thread (Unregister), so guarded.
         mutable std::mutex       m_playerLock;
         std::map<uint32, uint32> m_playerNodes;
+
+        // Phase 2 transport queues/state, shared with the network thread.
+        std::mutex                       m_outLock;
+        std::deque<ClusterOutFrame>      m_outQueue;   // frames awaiting send
+        std::mutex                       m_inLock;
+        std::deque<std::vector<uint8> >  m_inQueue;    // each = [type][payload], processed on world thread
+        std::mutex                       m_peerLock;
+        std::vector<ClusterPeer>         m_peers;      // current online peers
+        std::map<uint32, uint32>         m_peerLastSeen; // nodeId -> last heartbeat (ms)
 };
 
 #define sClusterMgr ClusterMgr::instance()

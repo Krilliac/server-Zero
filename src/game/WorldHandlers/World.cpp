@@ -989,6 +989,7 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_CLUSTER_ENABLE,           "Cluster.Enable", false);
     setConfigMinMax(CONFIG_UINT32_CLUSTER_NODE_ID,  "Cluster.NodeID", 1, 1, 255);
     setConfigMinMax(CONFIG_UINT32_CLUSTER_PORT,     "Cluster.Port", 0, 0, 65535);
+    setConfigMinMax(CONFIG_UINT32_CLUSTER_PEER_PORT,"Cluster.PeerPort", 8086, 0, 65535);
     setConfigMinMax(CONFIG_UINT32_CLUSTER_HEARTBEAT,"Cluster.HeartbeatSeconds", 30, 5, 3600);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary

@@ -1942,11 +1942,13 @@ TimeSync.Desync.Threshold    = 1000
 #       Cluster.NodeID            unique id of this node, 1..255 (default 1)
 #       Cluster.Host              address peers/clients reach this node on
 #       Cluster.Port              world port advertised in the registry (0=unset)
+#       Cluster.PeerPort          inter-node message-bus port (Phase 2, default 8086)
 #       Cluster.HeartbeatSeconds  liveness heartbeat interval (default 30)
 Cluster.Enable               = 0
 Cluster.NodeID               = 1
 Cluster.Host                 = 127.0.0.1
 Cluster.Port                 = 8085
+Cluster.PeerPort             = 8086
 Cluster.HeartbeatSeconds     = 30
 
 #    Debug Visualizer (Slice 2) — diagnostic only, no gameplay effect.
