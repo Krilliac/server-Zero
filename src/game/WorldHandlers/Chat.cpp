@@ -258,6 +258,10 @@ ChatCommand* ChatHandler::getCommandTable()
         { "selftest",       SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterSelfTestCommand,          "", NULL },
         { "migrate",        SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterMigrateCommand,           "", NULL },
         { "visual",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleClusterVisualCommand,            "", NULL },
+        { "automigrate",    SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterAutoMigrateCommand,       "", NULL },
+        { "migration",      SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterMigrationCommand,         "", NULL },
+        { "reloadzones",    SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterReloadZonesCommand,       "", NULL },
+        { "boundaries",     SEC_GAMEMASTER,     true,  &ChatHandler::HandleClusterBoundariesCommand,        "", NULL },
         { NULL,             0,                  false, NULL,                                               "", NULL }
     };
 

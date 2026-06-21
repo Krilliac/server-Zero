@@ -12,6 +12,9 @@
 #include "ClusterMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "Map.h"
+#include "GridMap.h"
+#include "DebugVis.h"
 #include "ByteBuffer.h"
 #include "Auth/Sha1.h"
 
@@ -222,5 +225,140 @@ bool ChatHandler::HandleClusterVisualCommand(char* args)
                     on ? "ENABLED" : "disabled", sClusterMgr->GetNodeId(),
                     sClusterMgr->GetNodeVisualKit(sClusterMgr->GetNodeId()),
                     sClusterMgr->GetMigrateVisualKit());
+    return true;
+}
+
+namespace
+{
+    // Parse on/off/1/0/enable/disable. Returns true if recognized (sets *out).
+    bool ParseOnOff(const char* a, bool* out)
+    {
+        std::string s = a ? a : "";
+        if (s == "on" || s == "1" || s == "enable")  { *out = true;  return true; }
+        if (s == "off" || s == "0" || s == "disable") { *out = false; return true; }
+        return false;
+    }
+}
+
+bool ChatHandler::HandleClusterAutoMigrateCommand(char* args)
+{
+    if (!args || !*args)
+    {
+        PSendSysMessage("Cluster auto-migrate: %s (this node %u). Usage: .cluster automigrate <on|off>",
+                        sClusterMgr->AutoMigrateEnabled() ? "ON" : "off", sClusterMgr->GetNodeId());
+        return true;
+    }
+    bool on;
+    if (!ParseOnOff(args, &on))
+    {
+        SendSysMessage("Usage: .cluster automigrate <on|off>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    sClusterMgr->SetAutoMigrate(on);
+    PSendSysMessage("Cluster auto-migrate %s on node %u (applies to this node only).",
+                    on ? "ENABLED" : "disabled", sClusterMgr->GetNodeId());
+    return true;
+}
+
+bool ChatHandler::HandleClusterMigrationCommand(char* args)
+{
+    if (!args || !*args)
+    {
+        PSendSysMessage("Cluster migration: %s (this node %u). Usage: .cluster migration <on|off>",
+                        sClusterMgr->IsMigrationEnabled() ? "ON" : "off", sClusterMgr->GetNodeId());
+        return true;
+    }
+    bool on;
+    if (!ParseOnOff(args, &on))
+    {
+        SendSysMessage("Usage: .cluster migration <on|off>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    sClusterMgr->SetMigrationEnabled(on);
+    PSendSysMessage("Cluster migration %s on node %u (applies to this node only).",
+                    on ? "ENABLED" : "disabled", sClusterMgr->GetNodeId());
+    return true;
+}
+
+bool ChatHandler::HandleClusterReloadZonesCommand(char* /*args*/)
+{
+    sClusterMgr->ReloadZoneMap();
+    SendSysMessage("Cluster: reloaded the zone->node assignment map from cluster_zone_assignment.");
+    return true;
+}
+
+bool ChatHandler::HandleClusterBoundariesCommand(char* args)
+{
+    Player* player = m_session ? m_session->GetPlayer() : NULL;
+    if (!player)
+        return false;
+    if (!sClusterMgr->IsEnabled())
+    {
+        SendSysMessage("Cluster: disabled (Cluster.Enable=0).");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    float radius = 80.0f, step = 16.0f;
+    if (args && *args)
+    {
+        float r = 0.0f, s = 0.0f;
+        int n = sscanf(args, "%f %f", &r, &s);
+        if (n >= 1 && r > 0.0f) radius = r;
+        if (n >= 2 && s > 0.0f) step = s;
+    }
+    if (step < 4.0f) step = 4.0f;
+    if (radius < step) radius = step;
+    int half = int(radius / step);
+    if (half > 8) half = 8; // cap (2*8+1)^2 = 289 markers
+
+    Map* map = player->GetMap();
+    float px = player->GetPositionX(), py = player->GetPositionY(), pz = player->GetPositionZ();
+    uint32 myNode = sClusterMgr->GetNodeId();
+
+    uint32 placed = 0, otherNode = 0;
+    for (int i = -half; i <= half; ++i)
+    {
+        for (int j = -half; j <= half; ++j)
+        {
+            float wx = px + i * step;
+            float wy = py + j * step;
+            float wz = map->GetHeight(wx, wy, pz + 50.0f);
+            if (wz < -50000.0f)
+                continue; // no ground here
+
+            uint32 zone  = map->GetTerrain()->GetZoneId(wx, wy, wz);
+            uint32 node  = sClusterMgr->GetNodeForZone(zone); // 0 = unassigned
+            uint32 owner = node ? node : myNode;              // unassigned zones stay on the current node
+
+            DebugVis::Category cat;
+            switch (owner)
+            {
+                case 1:  cat = DebugVis::DV_LOS_BLOCK; break; // node 1 -> red
+                case 2:  cat = DebugVis::DV_LOS_OK;    break; // node 2 -> green
+                case 3:  cat = DebugVis::DV_PATH;      break;
+                case 4:  cat = DebugVis::DV_COLLISION; break;
+                default: cat = DebugVis::DV_GENERIC;   break;
+            }
+            if (owner != myNode)
+                ++otherNode;
+
+            char lbl[200];
+            snprintf(lbl, sizeof(lbl),
+                     "Cluster boundary\nZone %u -> Node %u%s\n(%.1f, %.1f)",
+                     zone, owner,
+                     (owner == myNode ? " (this node)" : " (OTHER node - crossing here migrates you)"),
+                     wx, wy);
+            if (DebugVis::Marker(player, cat, wx, wy, wz, lbl))
+                ++placed;
+        }
+    }
+
+    PSendSysMessage("Cluster: drew %u boundary markers (%u on other nodes) around you on node %u. "
+                    "Colour change = node boundary; hover a marker for zone/node. Despawn in %us "
+                    "(or .debug vis clear).",
+                    placed, otherNode, myNode, DebugVis::DespawnSeconds());
     return true;
 }

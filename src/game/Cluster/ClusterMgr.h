@@ -82,12 +82,15 @@ class ClusterMgr
         void   RelayMovement(Player* mover, uint16 opcode, MovementInfo const& mi);
 
         bool   IsMigrationEnabled() const { return m_migrationEnabled; }
+        void   SetMigrationEnabled(bool on) { m_migrationEnabled = on; } // runtime toggle
         // Phase 4: hand a serialized player blob to a specific target node (directed).
         void   SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffer const& blob);
 
         // Phase 5: zone-affinity auto-migration.
         bool   AutoMigrateEnabled() const { return m_autoMigrate; }
+        void   SetAutoMigrate(bool on) { m_autoMigrate = on; }          // runtime toggle
         uint32 GetNodeForZone(uint32 zoneId) const;  // node owning a zone, 0 if unassigned
+        void   ReloadZoneMap() { LoadZoneMap(); }    // re-read cluster_zone_assignment live
 
         // Visual debug: per-node spell-visual indicator + event bursts. The master
         // flag is runtime-toggleable (.cluster visual) independent of the config.
