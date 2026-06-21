@@ -491,7 +491,18 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
                     }
 #endif /* ENABLE_ELUNA */
 
+                    sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
                     guild->BroadcastToGuild(this, msg, lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL);
+
+                    // Cluster: fan the guild message out to members logged into other
+                    // nodes. Local delivery already happened above; each peer delivers
+                    // only to its own online members, so the origin's members are not
+                    // double-fed (the origin doesn't process its own broadcast).
+                    if (sClusterMgr->IsEnabled())
+                        sClusterMgr->SendChatRelay(CHAT_MSG_GUILD,
+                            lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL,
+                            _player->GetObjectGuid().GetRawValue(), uint8(_player->GetChatTag()),
+                            _player->GetName(), "", msg, GetPlayer()->GetGuildId(), 0);
                 }
 
 #ifdef ENABLE_PLAYERBOTS
@@ -551,7 +562,15 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
                     }
 #endif /* ENABLE_ELUNA */
 
+                    sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
                     guild->BroadcastToOfficers(this, msg, lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL);
+
+                    // Cluster: relay officer chat to officers logged into other nodes.
+                    if (sClusterMgr->IsEnabled())
+                        sClusterMgr->SendChatRelay(CHAT_MSG_OFFICER,
+                            lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL,
+                            _player->GetObjectGuid().GetRawValue(), uint8(_player->GetChatTag()),
+                            _player->GetName(), "", msg, GetPlayer()->GetGuildId(), 0);
                 }
             }
             break;
@@ -850,7 +869,18 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
                     }
                     sRandomPlayerbotMgr.HandleCommand(type, msg, *_player);
 #endif /* ENABLE_PLAYERBOTS */
+                    sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
                     chn->Say(_player, msg.c_str(), lang);
+
+                    // Cluster: relay to the same-named channel on peer nodes. Carry the
+                    // sender's team so the receiver selects the matching faction channel
+                    // manager. Local delivery happened in Say(); peers deliver only to
+                    // their own members. Constant zone/city channels (General/Trade/
+                    // Defense) are per-node by nature and are not relayed cluster-wide.
+                    if (sClusterMgr->IsEnabled() && !chn->IsConstant())
+                        sClusterMgr->SendChatRelay(CHAT_MSG_CHANNEL, lang,
+                            _player->GetObjectGuid().GetRawValue(), uint8(_player->GetChatTag()),
+                            _player->GetName(), chn->GetName(), msg, 0, uint32(_player->GetTeam()));
                 }
             }
         } break;

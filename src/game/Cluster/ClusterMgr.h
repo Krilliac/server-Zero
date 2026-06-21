@@ -86,11 +86,15 @@ class ClusterMgr
         // Phase 4: hand a serialized player blob to a specific target node (directed).
         void   SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffer const& blob);
 
-        // Phase 6: relay a chat message to peer nodes (the node hosting the target
-        // delivers it). Currently used for cross-node whisper.
+        // Phase 6: relay a chat message to peer nodes; the node(s) hosting the
+        // recipients deliver it. Used for cross-node whisper, guild/officer and
+        // channel chat. destId = guild id for guild/officer chat (0 otherwise);
+        // team = sender's Team for channel-manager selection (0 otherwise). For
+        // whisper, toName is the target player name; for channel, toName is the
+        // channel name; for guild, toName is unused.
         void   SendChatRelay(uint8 chatType, uint32 lang, uint64 fromGuid, uint8 fromTag,
                              std::string const& fromName, std::string const& toName,
-                             std::string const& text);
+                             std::string const& text, uint32 destId = 0, uint32 team = 0);
 
         // Drain queued inbound peer messages. Called every world tick (cheap when
         // idle) so chat/migration relays have low latency, not the 30s heartbeat tick.

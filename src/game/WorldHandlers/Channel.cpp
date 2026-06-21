@@ -728,6 +728,23 @@ void Channel::Say(Player* player, const char* text, uint32 lang)
 }
 
 /**
+ * @brief Cluster: delivers a channel message relayed from another cluster node.
+ *
+ * The sender is on a different node, so there is no local Player and no membership/
+ * mute checks (those ran at the origin). We build a CHAT_MSG_CHANNEL packet carrying
+ * the relayed sender identity and broadcast it to every local member of this channel.
+ * Honor rank is not carried over the wire (rank glyph defaults to 0 for remote senders).
+ */
+void Channel::DeliverRelayedChat(uint32 lang, ObjectGuid fromGuid, uint32 chatTag,
+                                 const std::string& fromName, const std::string& text)
+{
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_CHANNEL, text.c_str(), Language(lang),
+        ChatTagFlags(chatTag), fromGuid, fromName.c_str(), ObjectGuid(), "", m_name.c_str(), 0);
+    SendToAll(&data, fromGuid);
+}
+
+/**
  * @brief Invites another player to the channel.
  *
  * @param player The player sending the invitation.

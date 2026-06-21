@@ -17,7 +17,7 @@ enum ClusterMessageType
     CLUSTER_MSG_PLAYER_ENTER   = 2, // a player became owned by the sending node
     CLUSTER_MSG_PLAYER_LEAVE   = 3, // a player left the sending node
     CLUSTER_MSG_RELAY_MOVEMENT = 4, // relayed movement packet (guid+opcode+MovementInfo)
-    CLUSTER_MSG_RELAY_CHAT     = 5, // relayed chat (Phase 6)
+    CLUSTER_MSG_RELAY_CHAT     = 5, // relayed chat: whisper/guild/officer/channel (Phase 6)
     CLUSTER_MSG_SOCIAL_STATUS  = 6, // friend/guild online status (Phase 6)
     CLUSTER_MSG_PLAYER_TRANSFER= 7, // migration hand-off: uint32 guid + serialized player blob (Phase 4)
 };

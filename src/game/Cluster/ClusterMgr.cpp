@@ -13,6 +13,10 @@
 #include "Chat.h"
 #include "WorldSession.h"
 #include "WorldPacket.h"
+#include "GuildMgr.h"
+#include "Guild.h"
+#include "ChannelMgr.h"
+#include "Channel.h"
 #include "Config/Config.h"
 #include "Database/DatabaseEnv.h"
 
@@ -310,7 +314,7 @@ void ClusterMgr::SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffe
 
 void ClusterMgr::SendChatRelay(uint8 chatType, uint32 lang, uint64 fromGuid, uint8 fromTag,
                                std::string const& fromName, std::string const& toName,
-                               std::string const& text)
+                               std::string const& text, uint32 destId, uint32 team)
 {
     if (!m_enabled)
         return;
@@ -323,10 +327,12 @@ void ClusterMgr::SendChatRelay(uint8 chatType, uint32 lang, uint64 fromGuid, uin
     payload << fromName;
     payload << toName;
     payload << text;
+    payload << uint32(destId); // guild id for guild/officer chat (0 otherwise)
+    payload << uint32(team);   // sender Team for channel lookup (0 otherwise)
 
     ByteBuffer frame;
     ClusterFrame::Build(frame, CLUSTER_MSG_RELAY_CHAT, payload);
-    EnqueueBroadcast(frame); // the node hosting the target delivers it
+    EnqueueBroadcast(frame); // peers hosting the recipients deliver it
 }
 
 void ClusterMgr::ProcessNetwork()
@@ -409,25 +415,56 @@ void ClusterMgr::DrainInbound()
             }
             case CLUSTER_MSG_RELAY_CHAT:
             {
-                // Phase 6: a chat message (whisper) relayed from another node —
-                // deliver to the target if they're on this node.
+                // Phase 6: a chat message relayed from another node — deliver it to the
+                // recipients that live on THIS node. Whisper -> single target by name;
+                // guild/officer -> the local guild's online members; channel -> the
+                // local same-named channel's members. The origin node already delivered
+                // locally and does not process its own broadcast, so no double-delivery.
                 if (frame.size() > 1)
                 {
                     ByteBuffer buf;
                     buf.append(&frame[1], frame.size() - 1);
                     uint8 chatType = 0, fromTag = 0;
-                    uint32 lang = 0;
+                    uint32 lang = 0, destId = 0, team = 0;
                     uint64 fromGuid = 0;
                     std::string fromName, toName, text;
                     buf >> chatType >> lang >> fromGuid >> fromTag >> fromName >> toName >> text;
+                    // destId/team appended in newer frames; tolerate older 7-field frames.
+                    if (buf.rpos() < buf.size())
+                        buf >> destId;
+                    if (buf.rpos() < buf.size())
+                        buf >> team;
 
-                    Player* tgt = sObjectAccessor.FindPlayerByName(toName.c_str());
-                    if (tgt && tgt->GetSession())
+                    switch (chatType)
                     {
-                        WorldPacket data;
-                        ChatHandler::BuildChatPacket(data, ChatMsg(chatType), text.c_str(),
-                            Language(lang), ChatTagFlags(fromTag), ObjectGuid(fromGuid), fromName.c_str());
-                        tgt->GetSession()->SendPacket(&data);
+                        case CHAT_MSG_GUILD:
+                        case CHAT_MSG_OFFICER:
+                        {
+                            if (Guild* guild = sGuildMgr.GetGuildById(destId))
+                                guild->DeliverRelayedChat(chatType, lang, ObjectGuid(fromGuid),
+                                    fromTag, fromName, text, chatType == CHAT_MSG_OFFICER);
+                            break;
+                        }
+                        case CHAT_MSG_CHANNEL:
+                        {
+                            if (ChannelMgr* cMgr = channelMgr(Team(team)))
+                                if (Channel* chn = cMgr->GetChannel(toName, NULL, false))
+                                    chn->DeliverRelayedChat(lang, ObjectGuid(fromGuid),
+                                        fromTag, fromName, text);
+                            break;
+                        }
+                        default: // CHAT_MSG_WHISPER and any other single-target relay
+                        {
+                            Player* tgt = sObjectAccessor.FindPlayerByName(toName.c_str());
+                            if (tgt && tgt->GetSession())
+                            {
+                                WorldPacket data;
+                                ChatHandler::BuildChatPacket(data, ChatMsg(chatType), text.c_str(),
+                                    Language(lang), ChatTagFlags(fromTag), ObjectGuid(fromGuid), fromName.c_str());
+                                tgt->GetSession()->SendPacket(&data);
+                            }
+                            break;
+                        }
                     }
                 }
                 break;

@@ -219,6 +219,14 @@ class Channel
         void Announce(Player* player);
         void Moderate(Player* player);
         void Say(Player* player, const char* text, uint32 lang);
+
+        // Cluster: deliver a channel message relayed from another node. The sender is
+        // on a different node (no local Player*); membership/mute/moderation were
+        // enforced at the origin, so we just build the packet and fan it out to the
+        // local members on this channel. text is already node-tagged at the source.
+        void DeliverRelayedChat(uint32 lang, ObjectGuid fromGuid, uint32 chatTag,
+                                const std::string& fromName, const std::string& text);
+
         void Invite(Player* player, const char* targetName);
         void Voice(ObjectGuid guid1, ObjectGuid guid2);
         void DeVoice(ObjectGuid guid1, ObjectGuid guid2);

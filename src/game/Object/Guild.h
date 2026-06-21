@@ -242,6 +242,15 @@ class Guild
 
         void BroadcastToGuild(WorldSession* session, const std::string& msg, uint32 language = LANG_UNIVERSAL);
         void BroadcastToOfficers(WorldSession* session, const std::string& msg, uint32 language = LANG_UNIVERSAL);
+
+        // Cluster: deliver a guild/officer chat message relayed from another node.
+        // The sender lives on a different node (no local session), so speak-right was
+        // enforced at the origin; here we apply only per-member listen-right + ignore
+        // against the local online members. Primitive param types keep this header free
+        // of Chat.h (the .cpp casts to the chat enums). officer selects officer chat.
+        void DeliverRelayedChat(uint32 msgType, uint32 lang, ObjectGuid fromGuid,
+                                uint32 chatTag, const std::string& fromName,
+                                const std::string& msg, bool officer);
         void BroadcastPacketToRank(WorldPacket* packet, uint32 rankId);
         void BroadcastPacket(WorldPacket* packet);
 

@@ -816,6 +816,37 @@ void Guild::BroadcastToOfficers(WorldSession* session, const std::string& msg, u
 }
 
 /**
+ * @brief Cluster: delivers a guild/officer chat message relayed from another node.
+ *
+ * Mirrors BroadcastToGuild/BroadcastToOfficers, but the sender is on a different
+ * cluster node so there is no local session: speak-right was checked at the origin.
+ * Here we enforce only each local member's listen-right and ignore list against the
+ * sender guid. Only members currently online on THIS node are reachable.
+ */
+void Guild::DeliverRelayedChat(uint32 msgType, uint32 lang, ObjectGuid fromGuid,
+                               uint32 chatTag, const std::string& fromName,
+                               const std::string& msg, bool officer)
+{
+    uint32 listenRight = officer ? GR_RIGHT_OFFCHATLISTEN : GR_RIGHT_GCHATLISTEN;
+
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, ChatMsg(msgType), msg.c_str(), Language(lang),
+        ChatTagFlags(chatTag), fromGuid, fromName.c_str());
+
+    for (MemberList::const_iterator itr = members.begin(); itr != members.end(); ++itr)
+    {
+        Player* pl = sObjectAccessor.FindPlayer(ObjectGuid(HIGHGUID_PLAYER, itr->first));
+
+        if (pl && pl->IsInWorld() && pl->GetSession() &&
+            HasRankRight(pl->GetRank(), listenRight) &&
+            !pl->GetSocial()->HasIgnore(fromGuid))
+        {
+            pl->GetSession()->SendPacket(&data);
+        }
+    }
+}
+
+/**
  * @brief Broadcasts a packet to all online guild members.
  *
  * @param packet The packet to send.
