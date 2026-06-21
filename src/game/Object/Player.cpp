@@ -54,6 +54,8 @@
 #include "GuildMgr.h"
 #include "Pet.h"
 #include "Util.h"
+#include "ByteBuffer.h"
+#include "Auth/Sha1.h"
 #include "Transports.h"
 #include "Weather.h"
 #include "BattleGround/BattleGround.h"
@@ -20694,6 +20696,176 @@ bool Player::_LoadHomeBind(QueryResult* result)
 
     DEBUG_LOG("Setting player home position: mapid is: %u, zoneid is %u, X is %f, Y is %f, Z is %f",
         m_homebindMapId, m_homebindAreaId, m_homebindX, m_homebindY, m_homebindZ);
+
+    return true;
+}
+
+/*********************************************************/
+/***              CLUSTER MIGRATION SNAPSHOT           ***/
+/*********************************************************/
+//
+// Portable, versioned, self-describing player-state blob, independent of the
+// SaveToDB SQL schema. Layout:
+//     uint32 magic ('MCL0')   uint16 version   uint32 guidLow
+//     repeated:  uint16 sectionId, uint32 byteLen, <body>
+//     uint16 SECTION_END (0xFFFF)
+//     uint8[20] SHA1 of everything above
+// Each section is length-prefixed, so a newer node can add sections and an older
+// node simply skips ids it doesn't know — forward/backward compatible.
+
+namespace
+{
+    const uint32 MIGRATION_MAGIC   = 0x304C434D; // 'MCL0'
+    const uint16 MIGRATION_VERSION = 1;
+
+    enum MigrationSection
+    {
+        MSEC_IDENTITY = 1,    // name, race, class, gender, level (info/routing)
+        MSEC_POSITION = 2,    // mapId, x, y, z, o
+        MSEC_FIELDS   = 3,    // full UpdateFields value array (stats/equipment/flags)
+        MSEC_MONEY    = 4,    // money (explicit; redundant with fields, for clarity)
+        MSEC_HOMEBIND = 5,    // homebind map/area/x/y/z
+        MSEC_SOCIAL   = 6,    // guildId (+ group key reserved for Phase 6/7)
+        MSEC_END      = 0xFFFF
+    };
+
+    inline void PutSection(ByteBuffer& out, uint16 id, ByteBuffer const& body)
+    {
+        out << uint16(id);
+        out << uint32(body.size());
+        if (body.size())
+            out.append(body.contents(), body.size());
+    }
+}
+
+void Player::SerializeForMigration(ByteBuffer& out)
+{
+    out << uint32(MIGRATION_MAGIC);
+    out << uint16(MIGRATION_VERSION);
+    out << uint32(GetGUIDLow());
+
+    {   // identity (informational / routing)
+        ByteBuffer b;
+        b << GetName();
+        b << uint8(getRace()) << uint8(getClass()) << uint8(getGender());
+        b << uint32(getLevel());
+        PutSection(out, MSEC_IDENTITY, b);
+    }
+    {   // position
+        ByteBuffer b;
+        b << uint32(GetMapId());
+        b << float(GetPositionX()) << float(GetPositionY())
+          << float(GetPositionZ()) << float(GetOrientation());
+        PutSection(out, MSEC_POSITION, b);
+    }
+    {   // full UpdateFields value array — the backbone of player state
+        ByteBuffer b;
+        uint16 count = GetValuesCount();
+        b << uint32(count);
+        for (uint16 i = 0; i < count; ++i)
+            b << uint32(GetUInt32Value(i));
+        PutSection(out, MSEC_FIELDS, b);
+    }
+    {   // money
+        ByteBuffer b;
+        b << uint32(GetMoney());
+        PutSection(out, MSEC_MONEY, b);
+    }
+    {   // homebind
+        ByteBuffer b;
+        b << uint32(m_homebindMapId) << uint16(m_homebindAreaId);
+        b << float(m_homebindX) << float(m_homebindY) << float(m_homebindZ);
+        PutSection(out, MSEC_HOMEBIND, b);
+    }
+    {   // social keys (group membership reserved for the cross-node social phase)
+        ByteBuffer b;
+        b << uint32(GetGuildId());
+        b << uint64(0); // group routing key — Phase 6/7
+        PutSection(out, MSEC_SOCIAL, b);
+    }
+
+    out << uint16(MSEC_END);
+
+    // trailing SHA1 over everything written so far (integrity / tamper check)
+    Sha1Hash sha;
+    sha.Initialize();
+    sha.UpdateData(out.contents(), out.size());
+    sha.Finalize();
+    out.append(sha.GetDigest(), sha.GetLength());
+}
+
+bool Player::DeserializeFromMigration(ByteBuffer& in)
+{
+    // header(10) + SECTION_END(2) + SHA1(20)
+    if (in.size() < 32)
+        return false;
+
+    // verify trailing SHA1 over the payload (everything but the last 20 bytes)
+    size_t payloadLen = in.size() - SHA_DIGEST_LENGTH;
+    Sha1Hash sha;
+    sha.Initialize();
+    sha.UpdateData(in.contents(), payloadLen);
+    sha.Finalize();
+    if (memcmp(sha.GetDigest(), in.contents() + payloadLen, SHA_DIGEST_LENGTH) != 0)
+        return false;
+
+    in.rpos(0);
+    uint32 magic;   in >> magic;   if (magic != MIGRATION_MAGIC)     return false;
+    uint16 version; in >> version; if (version != MIGRATION_VERSION) return false;
+    uint32 guidLow; in >> guidLow;
+
+    while (in.rpos() < payloadLen)
+    {
+        uint16 id; in >> id;
+        if (id == MSEC_END)
+            break;
+        uint32 len; in >> len;
+        size_t secEnd = in.rpos() + len;
+        if (secEnd > payloadLen)
+            return false; // truncated/corrupt
+
+        switch (id)
+        {
+            case MSEC_POSITION:
+            {
+                uint32 mapId; float x, y, z, o;
+                in >> mapId >> x >> y >> z >> o;
+                SetLocationMapId(mapId);
+                Relocate(x, y, z, o);
+                break;
+            }
+            case MSEC_FIELDS:
+            {
+                uint32 count; in >> count;
+                for (uint32 i = 0; i < count; ++i)
+                {
+                    uint32 v; in >> v;
+                    if (i < GetValuesCount())
+                        SetUInt32Value(uint16(i), v);
+                }
+                break;
+            }
+            case MSEC_MONEY:
+            {
+                uint32 money; in >> money;
+                SetMoney(money);
+                break;
+            }
+            case MSEC_HOMEBIND:
+            {
+                uint32 hm; uint16 ha; float hx, hy, hz;
+                in >> hm >> ha >> hx >> hy >> hz;
+                m_homebindMapId = hm; m_homebindAreaId = ha;
+                m_homebindX = hx; m_homebindY = hy; m_homebindZ = hz;
+                break;
+            }
+            // MSEC_IDENTITY / MSEC_SOCIAL: informational / routing only here.
+            default:
+                break;
+        }
+
+        in.rpos(secEnd); // robust skip — also handles unknown future sections
+    }
 
     return true;
 }

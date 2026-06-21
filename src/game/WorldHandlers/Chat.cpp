@@ -252,6 +252,13 @@ ChatCommand* ChatHandler::getCommandTable()
         { NULL,             0,                  false, NULL,                                                "", NULL }
     };
 
+    static ChatCommand clusterCommandTable[] =
+    {
+        { "status",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleClusterStatusCommand,            "", NULL },
+        { "selftest",       SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterSelfTestCommand,          "", NULL },
+        { NULL,             0,                  false, NULL,                                               "", NULL }
+    };
+
     static ChatCommand anticheatCommandTable[] =
     {
         { "status",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatStatusCommand,          "", NULL },
@@ -807,6 +814,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "auction",        SEC_ADMINISTRATOR,  false, NULL,                                           "", auctionCommandTable  },
         { "ahbot",          SEC_ADMINISTRATOR,  true,  NULL,                                           "", ahbotCommandTable    },
         { "anticheat",      SEC_GAMEMASTER,     true,  NULL,                                           "", anticheatCommandTable},
+        { "cluster",        SEC_GAMEMASTER,     true,  NULL,                                           "", clusterCommandTable  },
         { "spoof",          SEC_GAMEMASTER,     true,  &ChatHandler::HandleSpoofCommand,                "", NULL                 },
         { "timesync",       SEC_GAMEMASTER,     true,  NULL,                                           "", timesyncCommandTable },
         { "movement",       SEC_GAMEMASTER,     true,  NULL,                                           "", movementCommandTable },

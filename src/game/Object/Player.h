@@ -74,6 +74,7 @@
 #include<vector>
 
 struct Mail;
+class ByteBuffer;
 class Channel;
 class DynamicObject;
 class Creature;
@@ -2055,6 +2056,14 @@ class Player : public Unit
 
         // Save the player to the database
         void SaveToDB();
+
+        // --- Cluster migration (Phase 3): versioned, self-describing snapshot ---
+        // Serialize live state to a portable, forward-compatible blob (header +
+        // length-prefixed sections + trailing SHA1) so another node can rebuild
+        // the player. Independent of SaveToDB's SQL schema. DeserializeFromMigration
+        // verifies the blob and applies it to this player (destination side).
+        void SerializeForMigration(ByteBuffer& out);
+        bool DeserializeFromMigration(ByteBuffer& in);
 
         // Save the inventory and gold to the database
         void SaveInventoryAndGoldToDB(); // fast save function for item/money cheating preventing
