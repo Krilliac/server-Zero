@@ -47,6 +47,7 @@
 #include "Opcodes.h"
 #include "Log.h"
 #include "World.h"
+#include "ClusterMgr.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "CinematicFlyover.h"
@@ -642,6 +643,30 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recv_data)
     {
         sLog.outError("Player tryes to login again, AccountId = %d", GetAccountId());
         return;
+    }
+
+    // Cluster: node-affinity enforcement. A character migrated to another node
+    // (characters.cluster_node set) must be played on that node — refuse here so a
+    // shared-DB character is never loaded on the wrong node. The player should
+    // select the realm that maps to its assigned node. (cluster_node 0 = any node.)
+    if (sClusterMgr->IsEnabled())
+    {
+        QueryResult* res = CharacterDatabase.PQuery(
+            "SELECT `cluster_node` FROM `characters` WHERE `guid`=%u", playerGuid.GetCounter());
+        if (res)
+        {
+            uint32 assigned = (*res)[0].GetUInt32();
+            delete res;
+            if (assigned != 0 && assigned != sClusterMgr->GetNodeId())
+            {
+                WorldPacket data(SMSG_CHARACTER_LOGIN_FAILED, 1);
+                data << uint8(CHAR_LOGIN_NO_WORLD);
+                SendPacket(&data);
+                sLog.outString("Cluster: refused login of guid %u on node %u (assigned to node %u)",
+                               playerGuid.GetCounter(), sClusterMgr->GetNodeId(), assigned);
+                return;
+            }
+        }
     }
 
     m_playerLoading = true;
