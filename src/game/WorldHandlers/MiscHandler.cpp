@@ -71,6 +71,8 @@
 #include "OutdoorPvP/OutdoorPvP.h"
 #include "Pet.h"
 #include "SocialMgr.h"
+#include "Cluster/ClusterMgr.h"
+#include <set>
 #ifdef ENABLE_ELUNA
 #include "LuaEngine.h"
 #endif /* ENABLE_ELUNA */
@@ -341,6 +343,166 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recv_data)
         data << uint32(race);                               // player race
         data << uint32(pzoneid);                            // player zone id
     });
+
+    // --- Cluster: augment with players online on OTHER nodes ---
+    // The local loop above only sees players this node owns. In a cluster the
+    // characters table is shared, so its `online` flag is the cross-node
+    // presence source of truth (same model as cross-node whisper). We append
+    // matching online characters that this node does NOT own (not found in
+    // memory), applying the same visibility/filter rules as the local pass.
+    // Gated on the framework being enabled; a no-op single-node otherwise.
+    if (sClusterMgr->IsEnabled() && matchcount <= 49)
+    {
+        // For regular players we must reproduce the in-memory gmLevelInWhoList
+        // filter, but a remote char has no session to read security from — so
+        // gather the GM account set from the login DB and hide those.
+        std::set<uint32> hiddenGmAccounts;
+        if (security == SEC_PLAYER)
+        {
+            if (QueryResult* gmRes = LoginDatabase.PQuery(
+                    "SELECT `id` FROM `account` WHERE `gmlevel` > %u", uint32(gmLevelInWhoList)))
+            {
+                do { hiddenGmAccounts.insert((*gmRes)[0].GetUInt32()); }
+                while (gmRes->NextRow());
+                delete gmRes;
+            }
+        }
+
+        if (QueryResult* res = CharacterDatabase.Query(
+                "SELECT c.`guid`, c.`account`, c.`name`, c.`race`, c.`class`, c.`level`, c.`zone`, gm.`guildid` "
+                "FROM `characters` c LEFT JOIN `guild_member` gm ON gm.`guid` = c.`guid` "
+                "WHERE c.`online` <> 0"))
+        {
+            do
+            {
+                Field* f = res->Fetch();
+                uint32 guidLow   = f[0].GetUInt32();
+                uint32 accountId = f[1].GetUInt32();
+
+                // Owned by THIS node already → listed from memory above. Skip to
+                // avoid duplicates (this is also what restricts us to remote nodes).
+                if (sObjectAccessor.FindPlayer(ObjectGuid(HIGHGUID_PLAYER, guidLow), false))
+                {
+                    continue;
+                }
+
+                // Hide GMs from regular players (mirrors the local-loop policy).
+                if (security == SEC_PLAYER && hiddenGmAccounts.find(accountId) != hiddenGmAccounts.end())
+                {
+                    continue;
+                }
+
+                std::string pname = f[2].GetCppString();
+                uint32 race    = f[3].GetUInt8();
+                uint32 class_  = f[4].GetUInt8();
+                uint32 lvl     = f[5].GetUInt32();
+                uint32 pzoneid = f[6].GetUInt32();
+                uint32 guildId = f[7].GetUInt32();
+
+                // two-side who filter — team derived from race (no Player object)
+                if (security == SEC_PLAYER && !allowTwoSideWhoList &&
+                    Player::TeamForRace(race) != team)
+                {
+                    continue;
+                }
+
+                if (lvl < level_min || lvl > level_max)
+                {
+                    continue;
+                }
+                if (!(classmask & (1 << class_)))
+                {
+                    continue;
+                }
+                if (!(racemask & (1 << race)))
+                {
+                    continue;
+                }
+
+                // zone filter (no instance context across nodes → treat as not
+                // sharing the viewer's instance)
+                bool z_show = true;
+                for (uint32 i = 0; i < zones_count; ++i)
+                {
+                    if (zoneids[i] == pzoneid)
+                    {
+                        z_show = (zone != pzoneid) || notInBattleground;
+                        break;
+                    }
+                    z_show = false;
+                }
+                if (!z_show)
+                {
+                    continue;
+                }
+
+                std::wstring wpname;
+                if (!Utf8toWStr(pname, wpname))
+                {
+                    continue;
+                }
+                wstrToLower(wpname);
+                if (!(wplayer_name.empty() || wpname.find(wplayer_name) != std::wstring::npos))
+                {
+                    continue;
+                }
+
+                std::string gname = sGuildMgr.GetGuildNameById(guildId);
+                std::wstring wgname;
+                if (!Utf8toWStr(gname, wgname))
+                {
+                    continue;
+                }
+                wstrToLower(wgname);
+                if (!(wguild_name.empty() || wgname.find(wguild_name) != std::wstring::npos))
+                {
+                    continue;
+                }
+
+                std::string aname;
+                if (AreaTableEntry const* areaEntry = GetAreaEntryByAreaID(pzoneid))
+                {
+                    aname = areaEntry->area_name[GetSessionDbcLocale()];
+                }
+
+                bool s_show = true;
+                for (uint32 i = 0; i < str_count; ++i)
+                {
+                    if (!str[i].empty())
+                    {
+                        if (wgname.find(str[i]) != std::wstring::npos ||
+                            wpname.find(str[i]) != std::wstring::npos ||
+                            Utf8FitTo(aname, str[i]))
+                        {
+                            s_show = true;
+                            break;
+                        }
+                        s_show = false;
+                    }
+                }
+                if (!s_show)
+                {
+                    continue;
+                }
+
+                if (++matchcount > 49)                       // client display cap
+                {
+                    break;
+                }
+
+                ++displaycount;
+
+                data << pname;                               // player name
+                data << gname;                               // guild name
+                data << uint32(lvl);                         // player level
+                data << uint32(class_);                      // player class
+                data << uint32(race);                        // player race
+                data << uint32(pzoneid);                     // player zone id
+            }
+            while (res->NextRow());
+            delete res;
+        }
+    }
 
     if (sWorld.getConfig(CONFIG_UINT32_MAX_WHOLIST_RETURNS) && matchcount > sWorld.getConfig(CONFIG_UINT32_MAX_WHOLIST_RETURNS))
     {
