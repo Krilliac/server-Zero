@@ -8664,6 +8664,16 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea)
     /* If we're moving into a different zone */
     if (m_zoneUpdateId != newZone)
     {
+        // Cluster (Phase 5): auto-migrate to the node that owns the entered zone.
+        // MigrateToNode kicks for reconnect (and self-gates on CanMigrate +
+        // EnableMigration), so the rest of this zone update is moot once it fires.
+        if (sClusterMgr->IsEnabled() && sClusterMgr->AutoMigrateEnabled())
+        {
+            uint32 targetNode = sClusterMgr->GetNodeForZone(newZone);
+            if (targetNode && targetNode != sClusterMgr->GetNodeId() && MigrateToNode(targetNode))
+                return;
+        }
+
         // handle outdoor pvp zones
         sOutdoorPvPMgr.HandlePlayerLeaveZone(this, m_zoneUpdateId);
         sOutdoorPvPMgr.HandlePlayerEnterZone(this, newZone);

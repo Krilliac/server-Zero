@@ -1945,6 +1945,8 @@ TimeSync.Desync.Threshold    = 1000
 #       Cluster.PeerPort          inter-node message-bus port (Phase 2, default 8086)
 #       Cluster.HeartbeatSeconds  liveness heartbeat interval (default 30)
 #       Cluster.EnableMigration   allow .cluster migrate player hand-off (Phase 4, default 0)
+#       Cluster.AutoMigrate       auto-migrate on entering a zone owned by another node
+#                                 (Phase 5, needs EnableMigration; uses cluster_zone_assignment)
 Cluster.Enable               = 0
 Cluster.NodeID               = 1
 Cluster.Host                 = 127.0.0.1
@@ -1952,6 +1954,7 @@ Cluster.Port                 = 8085
 Cluster.PeerPort             = 8086
 Cluster.HeartbeatSeconds     = 30
 Cluster.EnableMigration      = 0
+Cluster.AutoMigrate          = 0
 
 #    Debug Visualizer (Slice 2) — diagnostic only, no gameplay effect.
 #    When enabled (requires AntiCheat.Enable=1) the server spawns temporary,

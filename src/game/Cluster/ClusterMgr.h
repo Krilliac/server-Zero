@@ -85,6 +85,10 @@ class ClusterMgr
         // Phase 4: hand a serialized player blob to a specific target node (directed).
         void   SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffer const& blob);
 
+        // Phase 5: zone-affinity auto-migration.
+        bool   AutoMigrateEnabled() const { return m_autoMigrate; }
+        uint32 GetNodeForZone(uint32 zoneId) const;  // node owning a zone, 0 if unassigned
+
         // --- Phase 2: inter-node transport bridge (called by ClusterThread) ---
         bool PopOutbound(std::vector<ClusterOutFrame>& out);          // net thread: drain send queue
         void GetPeers(std::vector<ClusterPeer>& out);                 // net thread: current peer list
@@ -97,6 +101,7 @@ class ClusterMgr
         ClusterMgr& operator=(ClusterMgr const&);
 
         void RegisterNode();     // upsert this node's row, status='online'
+        void LoadZoneMap();      // load cluster_zone_assignment into m_zoneMap
         void Heartbeat();        // refresh last_heartbeat + player_count
         void MarkStaleOffline(); // flip peers that missed heartbeats to 'offline'
 
@@ -107,6 +112,7 @@ class ClusterMgr
 
         bool        m_enabled;
         bool        m_migrationEnabled;
+        bool        m_autoMigrate;
         uint32      m_nodeId;
         uint32      m_port;
         uint32      m_peerPort;  // inter-node listen/connect port
@@ -129,6 +135,10 @@ class ClusterMgr
         std::mutex                       m_peerLock;
         std::vector<ClusterPeer>         m_peers;      // current online peers
         std::map<uint32, uint32>         m_peerLastSeen; // nodeId -> last heartbeat (ms)
+
+        // Phase 5: zone -> owning node, loaded from cluster_zone_assignment.
+        mutable std::mutex       m_zoneLock;
+        std::map<uint32, uint32> m_zoneMap;
 };
 
 #define sClusterMgr ClusterMgr::instance()

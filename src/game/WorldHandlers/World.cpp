@@ -994,6 +994,9 @@ void World::LoadConfigSettings(bool reload)
     // Player migration (hand-off between nodes). Gated separately from the cluster
     // master switch and OFF by default — enables .cluster migrate and transfer relay.
     setConfig(CONFIG_BOOL_CLUSTER_MIGRATION,        "Cluster.EnableMigration", false);
+    // Auto-migrate a player to the node that owns a zone on zone entry (needs
+    // EnableMigration too). Maps zones->nodes via the cluster_zone_assignment table.
+    setConfig(CONFIG_BOOL_CLUSTER_AUTOMIGRATE,      "Cluster.AutoMigrate", false);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.

@@ -14,7 +14,7 @@
 #include "Database/DatabaseEnv.h"
 
 ClusterMgr::ClusterMgr()
-    : m_enabled(false), m_migrationEnabled(false), m_nodeId(1), m_port(0), m_peerPort(0), m_capacity(0),
+    : m_enabled(false), m_migrationEnabled(false), m_autoMigrate(false), m_nodeId(1), m_port(0), m_peerPort(0), m_capacity(0),
       m_heartbeatSec(30), m_host("127.0.0.1"), m_net(NULL)
 {
 }
@@ -23,6 +23,7 @@ void ClusterMgr::LoadConfig()
 {
     m_enabled          = sWorld.getConfig(CONFIG_BOOL_CLUSTER_ENABLE);
     m_migrationEnabled = sWorld.getConfig(CONFIG_BOOL_CLUSTER_MIGRATION);
+    m_autoMigrate      = sWorld.getConfig(CONFIG_BOOL_CLUSTER_AUTOMIGRATE);
     m_nodeId       = sWorld.getConfig(CONFIG_UINT32_CLUSTER_NODE_ID);
     m_port         = sWorld.getConfig(CONFIG_UINT32_CLUSTER_PORT);
     m_heartbeatSec = sWorld.getConfig(CONFIG_UINT32_CLUSTER_HEARTBEAT);
@@ -31,6 +32,42 @@ void ClusterMgr::LoadConfig()
     m_peerPort     = sWorld.getConfig(CONFIG_UINT32_CLUSTER_PEER_PORT);
     m_capacity     = sWorld.GetPlayerAmountLimit();
     m_host         = sConfig.GetStringDefault("Cluster.Host", "127.0.0.1");
+
+    // Load (or refresh, on .reload config) the zone->node assignment table.
+    if (m_enabled)
+        LoadZoneMap();
+}
+
+void ClusterMgr::LoadZoneMap()
+{
+    std::map<uint32, uint32> m;
+    QueryResult* result = LoginDatabase.Query(
+        "SELECT `zone_id`,`node_id` FROM `cluster_zone_assignment`");
+    if (result)
+    {
+        do
+        {
+            Field* f = result->Fetch();
+            uint32 z = f[0].GetUInt32();
+            uint32 n = f[1].GetUInt32();
+            if (z && n)
+                m[z] = n;
+        } while (result->NextRow());
+        delete result;
+    }
+
+    std::lock_guard<std::mutex> guard(m_zoneLock);
+    m_zoneMap.swap(m);
+    sLog.outString("Cluster: loaded %u zone->node assignment(s).", (uint32)m_zoneMap.size());
+}
+
+uint32 ClusterMgr::GetNodeForZone(uint32 zoneId) const
+{
+    if (!m_enabled || !zoneId)
+        return 0;
+    std::lock_guard<std::mutex> guard(m_zoneLock);
+    std::map<uint32, uint32>::const_iterator it = m_zoneMap.find(zoneId);
+    return it != m_zoneMap.end() ? it->second : 0;
 }
 
 void ClusterMgr::Init()
