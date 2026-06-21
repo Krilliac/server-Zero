@@ -317,6 +317,31 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
             }
 
             Player* player = sObjectMgr.GetPlayer(to.c_str());
+
+            // Cluster: if the target isn't on this node but is online elsewhere
+            // (shared-DB presence), relay the whisper to peers — the node hosting
+            // the target delivers it — and echo "To <name>:" back to the sender.
+            if (!player && sClusterMgr->IsEnabled())
+            {
+                std::string safeName = to;
+                CharacterDatabase.escape_string(safeName);
+                QueryResult* res = CharacterDatabase.PQuery(
+                    "SELECT `guid` FROM `characters` WHERE `name`='%s' AND `online`<>0", safeName.c_str());
+                if (res)
+                {
+                    uint32 tLow = (*res)[0].GetUInt32();
+                    delete res;
+                    sClusterMgr->SendChatRelay(CHAT_MSG_WHISPER, lang,
+                        _player->GetObjectGuid().GetRawValue(), uint8(_player->GetChatTag()),
+                        _player->GetName(), to, msg);
+                    WorldPacket cdata;
+                    ChatHandler::BuildChatPacket(cdata, CHAT_MSG_WHISPER_INFORM, msg.c_str(),
+                        Language(lang), CHAT_TAG_NONE, ObjectGuid(HIGHGUID_PLAYER, tLow), to.c_str());
+                    SendPacket(&cdata);
+                    return;
+                }
+            }
+
             uint32 tSecurity = GetSecurity();
             uint32 pSecurity = player ? player->GetSession()->GetSecurity() : SEC_PLAYER;
             if (!player || (tSecurity == SEC_PLAYER && pSecurity > SEC_PLAYER && !player->isAcceptWhispers()))

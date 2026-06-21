@@ -86,6 +86,16 @@ class ClusterMgr
         // Phase 4: hand a serialized player blob to a specific target node (directed).
         void   SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffer const& blob);
 
+        // Phase 6: relay a chat message to peer nodes (the node hosting the target
+        // delivers it). Currently used for cross-node whisper.
+        void   SendChatRelay(uint8 chatType, uint32 lang, uint64 fromGuid, uint8 fromTag,
+                             std::string const& fromName, std::string const& toName,
+                             std::string const& text);
+
+        // Drain queued inbound peer messages. Called every world tick (cheap when
+        // idle) so chat/migration relays have low latency, not the 30s heartbeat tick.
+        void   ProcessNetwork();
+
         // Phase 5: zone-affinity auto-migration.
         bool   AutoMigrateEnabled() const { return m_autoMigrate; }
         void   SetAutoMigrate(bool on) { m_autoMigrate = on; }          // runtime toggle

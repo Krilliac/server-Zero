@@ -10,6 +10,9 @@
 #include "Timer.h"
 #include "Player.h"
 #include "ObjectAccessor.h"
+#include "Chat.h"
+#include "WorldSession.h"
+#include "WorldPacket.h"
 #include "Config/Config.h"
 #include "Database/DatabaseEnv.h"
 
@@ -305,6 +308,34 @@ void ClusterMgr::SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffe
     EnqueueDirected(targetNode, frame);
 }
 
+void ClusterMgr::SendChatRelay(uint8 chatType, uint32 lang, uint64 fromGuid, uint8 fromTag,
+                               std::string const& fromName, std::string const& toName,
+                               std::string const& text)
+{
+    if (!m_enabled)
+        return;
+
+    ByteBuffer payload;
+    payload << uint8(chatType);
+    payload << uint32(lang);
+    payload << uint64(fromGuid);
+    payload << uint8(fromTag);
+    payload << fromName;
+    payload << toName;
+    payload << text;
+
+    ByteBuffer frame;
+    ClusterFrame::Build(frame, CLUSTER_MSG_RELAY_CHAT, payload);
+    EnqueueBroadcast(frame); // the node hosting the target delivers it
+}
+
+void ClusterMgr::ProcessNetwork()
+{
+    if (!m_enabled)
+        return;
+    DrainInbound();
+}
+
 void ClusterMgr::RefreshPeers()
 {
     std::vector<ClusterPeer> peers;
@@ -376,9 +407,33 @@ void ClusterMgr::DrainInbound()
                 }
                 break;
             }
+            case CLUSTER_MSG_RELAY_CHAT:
+            {
+                // Phase 6: a chat message (whisper) relayed from another node —
+                // deliver to the target if they're on this node.
+                if (frame.size() > 1)
+                {
+                    ByteBuffer buf;
+                    buf.append(&frame[1], frame.size() - 1);
+                    uint8 chatType = 0, fromTag = 0;
+                    uint32 lang = 0;
+                    uint64 fromGuid = 0;
+                    std::string fromName, toName, text;
+                    buf >> chatType >> lang >> fromGuid >> fromTag >> fromName >> toName >> text;
+
+                    Player* tgt = sObjectAccessor.FindPlayerByName(toName.c_str());
+                    if (tgt && tgt->GetSession())
+                    {
+                        WorldPacket data;
+                        ChatHandler::BuildChatPacket(data, ChatMsg(chatType), text.c_str(),
+                            Language(lang), ChatTagFlags(fromTag), ObjectGuid(fromGuid), fromName.c_str());
+                        tgt->GetSession()->SendPacket(&data);
+                    }
+                }
+                break;
+            }
             case CLUSTER_MSG_PLAYER_ENTER:
             case CLUSTER_MSG_PLAYER_LEAVE:
-            case CLUSTER_MSG_RELAY_CHAT:
             case CLUSTER_MSG_SOCIAL_STATUS:
             default:
                 break;
@@ -394,7 +449,7 @@ void ClusterMgr::Update(uint32 /*diff*/)
     Heartbeat();
     MarkStaleOffline();
     RefreshPeers();
-    DrainInbound();
+    // (inbound is drained every world tick via ProcessNetwork, not here)
 
     // Emit a heartbeat frame to peers so they register us as live on the wire.
     ByteBuffer payload;

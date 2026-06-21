@@ -1988,6 +1988,8 @@ void World::Update(uint32 diff)
         sClusterMgr->Update(m_timers[WUPDATE_CLUSTER].GetCurrent());
         m_timers[WUPDATE_CLUSTER].Reset();
     }
+    // Drain inbound cluster peer messages every tick (low-latency chat/migration relay)
+    sClusterMgr->ProcessNetwork();
 
 #ifdef ENABLE_PLAYERBOTS
     sRandomPlayerbotMgr.UpdateAI(diff);
