@@ -50,6 +50,7 @@
 #include "ObjectAccessor.h"
 #include "Formulas.h"
 #include "Group.h"
+#include "ClusterMgr.h"
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "Pet.h"
@@ -20996,6 +20997,79 @@ bool Player::DeserializeFromMigration(ByteBuffer& in)
         in.rpos(secEnd); // robust skip — also handles unknown future sections
     }
 
+    return true;
+}
+
+// Validate a received migration blob (destination side) without applying it:
+// checks size, trailing SHA1, magic and version, and extracts the character guid.
+bool Player::ValidateMigrationBlob(ByteBuffer& in, uint32& guidOut)
+{
+    guidOut = 0;
+    if (in.size() < 32)
+        return false;
+
+    size_t payloadLen = in.size() - SHA_DIGEST_LENGTH;
+    Sha1Hash sha;
+    sha.Initialize();
+    sha.UpdateData(in.contents(), payloadLen);
+    sha.Finalize();
+    if (memcmp(sha.GetDigest(), in.contents() + payloadLen, SHA_DIGEST_LENGTH) != 0)
+        return false;
+
+    in.rpos(0);
+    uint32 magic;   in >> magic;   if (magic != MIGRATION_MAGIC)     return false;
+    uint16 version; in >> version; if (version != MIGRATION_VERSION) return false;
+    in >> guidOut;
+    return true;
+}
+
+// Gate migration to a safe player state. Reasons are reported to the issuing GM.
+bool Player::CanMigrate(std::string& reason) const
+{
+    if (!IsInWorld())                          { reason = "not in world";   return false; }
+    if (IsBeingTeleported())                   { reason = "teleporting";    return false; }
+    if (IsTaxiFlying())                        { reason = "in flight";      return false; }
+    if (IsInCombat())                          { reason = "in combat";      return false; }
+    if (!IsAlive())                            { reason = "dead";           return false; }
+    if (GetMap() && GetMap()->Instanceable())  { reason = "in an instance"; return false; }
+    return true;
+}
+
+// Disconnect-reconnect migration (Phase 4): persist + serialize + hand off to the
+// target node, record the assignment, then drop the client so it reconnects and
+// the target node loads the (just-saved) character from the shared DB.
+bool Player::MigrateToNode(uint32 nodeId)
+{
+    if (!sClusterMgr->IsEnabled() || !sClusterMgr->IsMigrationEnabled())
+        return false;
+    if (!nodeId || nodeId == sClusterMgr->GetNodeId())
+        return false;
+
+    std::string reason;
+    if (!CanMigrate(reason))
+    {
+        sLog.outString("Cluster: migrate refused for %s (guid %u): %s",
+                       GetName(), GetGUIDLow(), reason.c_str());
+        return false;
+    }
+
+    // Persist current state to the shared DB — the source of truth for the reconnect.
+    SaveToDB();
+
+    // Hand a SHA1'd snapshot to the target node (validation / pre-stage).
+    ByteBuffer blob;
+    SerializeForMigration(blob);
+    sClusterMgr->SendPlayerTransfer(nodeId, GetGUIDLow(), blob);
+
+    // Record the assignment so login routing sends the player to the target node.
+    CharacterDatabase.PExecute("UPDATE `characters` SET `cluster_node`=%u WHERE `guid`=%u",
+                               nodeId, GetGUIDLow());
+
+    sLog.outString("Cluster: migrating %s (guid %u) to node %u; kicking for reconnect.",
+                   GetName(), GetGUIDLow(), nodeId);
+
+    if (GetSession())
+        GetSession()->KickPlayer();
     return true;
 }
 

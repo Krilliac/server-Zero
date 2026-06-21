@@ -81,6 +81,10 @@ class ClusterMgr
         // from map threads); the network thread does the actual send.
         void   RelayMovement(Player* mover, uint16 opcode, MovementInfo const& mi);
 
+        bool   IsMigrationEnabled() const { return m_migrationEnabled; }
+        // Phase 4: hand a serialized player blob to a specific target node (directed).
+        void   SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffer const& blob);
+
         // --- Phase 2: inter-node transport bridge (called by ClusterThread) ---
         bool PopOutbound(std::vector<ClusterOutFrame>& out);          // net thread: drain send queue
         void GetPeers(std::vector<ClusterPeer>& out);                 // net thread: current peer list
@@ -98,9 +102,11 @@ class ClusterMgr
 
         void RefreshPeers();     // world thread: rebuild m_peers from cluster_nodes
         void DrainInbound();     // world thread: process queued inbound frames
-        void EnqueueBroadcast(ByteBuffer const& frame); // queue a wire frame for all peers
+        void EnqueueBroadcast(ByteBuffer const& frame);              // queue a wire frame for all peers
+        void EnqueueDirected(uint32 target, ByteBuffer const& frame); // queue a wire frame for one peer
 
         bool        m_enabled;
+        bool        m_migrationEnabled;
         uint32      m_nodeId;
         uint32      m_port;
         uint32      m_peerPort;  // inter-node listen/connect port

@@ -991,6 +991,9 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_CLUSTER_PORT,     "Cluster.Port", 0, 0, 65535);
     setConfigMinMax(CONFIG_UINT32_CLUSTER_PEER_PORT,"Cluster.PeerPort", 8086, 0, 65535);
     setConfigMinMax(CONFIG_UINT32_CLUSTER_HEARTBEAT,"Cluster.HeartbeatSeconds", 30, 5, 3600);
+    // Player migration (hand-off between nodes). Gated separately from the cluster
+    // master switch and OFF by default — enables .cluster migrate and transfer relay.
+    setConfig(CONFIG_BOOL_CLUSTER_MIGRATION,        "Cluster.EnableMigration", false);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.

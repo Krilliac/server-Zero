@@ -19,6 +19,7 @@ enum ClusterMessageType
     CLUSTER_MSG_RELAY_MOVEMENT = 4, // relayed movement packet (guid+opcode+MovementInfo)
     CLUSTER_MSG_RELAY_CHAT     = 5, // relayed chat (Phase 6)
     CLUSTER_MSG_SOCIAL_STATUS  = 6, // friend/guild online status (Phase 6)
+    CLUSTER_MSG_PLAYER_TRANSFER= 7, // migration hand-off: uint32 guid + serialized player blob (Phase 4)
 };
 
 namespace ClusterFrame

@@ -14,14 +14,15 @@
 #include "Database/DatabaseEnv.h"
 
 ClusterMgr::ClusterMgr()
-    : m_enabled(false), m_nodeId(1), m_port(0), m_peerPort(0), m_capacity(0),
+    : m_enabled(false), m_migrationEnabled(false), m_nodeId(1), m_port(0), m_peerPort(0), m_capacity(0),
       m_heartbeatSec(30), m_host("127.0.0.1"), m_net(NULL)
 {
 }
 
 void ClusterMgr::LoadConfig()
 {
-    m_enabled      = sWorld.getConfig(CONFIG_BOOL_CLUSTER_ENABLE);
+    m_enabled          = sWorld.getConfig(CONFIG_BOOL_CLUSTER_ENABLE);
+    m_migrationEnabled = sWorld.getConfig(CONFIG_BOOL_CLUSTER_MIGRATION);
     m_nodeId       = sWorld.getConfig(CONFIG_UINT32_CLUSTER_NODE_ID);
     m_port         = sWorld.getConfig(CONFIG_UINT32_CLUSTER_PORT);
     m_heartbeatSec = sWorld.getConfig(CONFIG_UINT32_CLUSTER_HEARTBEAT);
@@ -212,6 +213,32 @@ void ClusterMgr::EnqueueBroadcast(ByteBuffer const& frame)
     m_outQueue.push_back(f);
 }
 
+void ClusterMgr::EnqueueDirected(uint32 target, ByteBuffer const& frame)
+{
+    ClusterOutFrame f;
+    f.target = target; // single peer
+    if (frame.size())
+        f.bytes.assign(frame.contents(), frame.contents() + frame.size());
+
+    std::lock_guard<std::mutex> guard(m_outLock);
+    m_outQueue.push_back(f);
+}
+
+void ClusterMgr::SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffer const& blob)
+{
+    if (!m_enabled || !targetNode || targetNode == m_nodeId)
+        return;
+
+    ByteBuffer payload;
+    payload << (uint32)guidLow;
+    if (blob.size())
+        payload.append(blob.contents(), blob.size());
+
+    ByteBuffer frame;
+    ClusterFrame::Build(frame, CLUSTER_MSG_PLAYER_TRANSFER, payload);
+    EnqueueDirected(targetNode, frame);
+}
+
 void ClusterMgr::RefreshPeers()
 {
     std::vector<ClusterPeer> peers;
@@ -260,6 +287,29 @@ void ClusterMgr::DrainInbound()
                 // Phase 2: frame received. Re-broadcasting to nearby local clients
                 // happens once cross-node players exist (Phase 4+); consume for now.
                 break;
+            case CLUSTER_MSG_PLAYER_TRANSFER:
+            {
+                // Phase 4: an incoming migration hand-off. Payload = uint32 guidLow +
+                // serialized player blob. Validate integrity here; the player's state
+                // is already in the shared DB (source saved before transfer), so the
+                // character loads from DB when the client reconnects to this node.
+                if (frame.size() >= 1 + 4)
+                {
+                    ByteBuffer buf;
+                    buf.append(&frame[1], frame.size() - 1);
+                    uint32 guidLow = 0;
+                    buf >> guidLow;
+                    ByteBuffer blob;
+                    size_t rem = buf.size() - buf.rpos();
+                    if (rem)
+                        blob.append(buf.contents() + buf.rpos(), rem);
+                    uint32 blobGuid = 0;
+                    bool ok = Player::ValidateMigrationBlob(blob, blobGuid);
+                    sLog.outString("Cluster: incoming player migration guid %u -> node %u: %s (blob guid %u)",
+                                   guidLow, m_nodeId, ok ? "validated" : "INVALID", blobGuid);
+                }
+                break;
+            }
             case CLUSTER_MSG_PLAYER_ENTER:
             case CLUSTER_MSG_PLAYER_LEAVE:
             case CLUSTER_MSG_RELAY_CHAT:

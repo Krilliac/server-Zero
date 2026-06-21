@@ -10,6 +10,8 @@
 #include "Player.h"
 #include "World.h"
 #include "ClusterMgr.h"
+#include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "ByteBuffer.h"
 #include "Auth/Sha1.h"
 
@@ -140,5 +142,55 @@ bool ChatHandler::HandleClusterSelfTestCommand(char* /*args*/)
     else
         PSendSysMessage("Cluster selftest: FAIL —%s", diffs.c_str());
 
+    return true;
+}
+
+bool ChatHandler::HandleClusterMigrateCommand(char* args)
+{
+    if (!sClusterMgr->IsEnabled())
+    {
+        SendSysMessage("Cluster: disabled (Cluster.Enable = 0).");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    if (!sClusterMgr->IsMigrationEnabled())
+    {
+        SendSysMessage("Cluster: migration disabled (Cluster.EnableMigration = 0).");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    char* nameStr = ExtractArg(&args);
+    char* nodeStr = ExtractArg(&args);
+    if (!nameStr || !nodeStr)
+    {
+        SendSysMessage("Syntax: .cluster migrate <playerName> <nodeId>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    uint32 nodeId = (uint32)atoi(nodeStr);
+    std::string name = nameStr;
+    if (!normalizePlayerName(name))
+    {
+        SendSysMessage("Cluster: invalid player name.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    Player* target = sObjectAccessor.FindPlayerByName(name.c_str());
+    if (!target)
+    {
+        PSendSysMessage("Cluster: player '%s' is not online on this node.", name.c_str());
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    if (target->MigrateToNode(nodeId))
+        PSendSysMessage("Cluster: migrating %s to node %u (client will reconnect).",
+                        target->GetName(), nodeId);
+    else
+        PSendSysMessage("Cluster: migration of %s to node %u refused — check the server log "
+                        "(CanMigrate gate / target node id).", name.c_str(), nodeId);
     return true;
 }

@@ -256,6 +256,7 @@ ChatCommand* ChatHandler::getCommandTable()
     {
         { "status",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleClusterStatusCommand,            "", NULL },
         { "selftest",       SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterSelfTestCommand,          "", NULL },
+        { "migrate",        SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterMigrateCommand,           "", NULL },
         { NULL,             0,                  false, NULL,                                               "", NULL }
     };
 

@@ -2065,6 +2065,15 @@ class Player : public Unit
         void SerializeForMigration(ByteBuffer& out);
         bool DeserializeFromMigration(ByteBuffer& in);
 
+        // --- Cluster migration (Phase 4): GM-triggered hand-off to another node ---
+        // CanMigrate gates on a safe state (no combat/flight/teleport/instance/death).
+        // MigrateToNode saves + serializes + hands off + marks the assignment + kicks
+        // (disconnect-reconnect model). ValidateMigrationBlob (destination side) checks
+        // a received blob's integrity without applying it.
+        bool CanMigrate(std::string& reason) const;
+        bool MigrateToNode(uint32 nodeId);
+        static bool ValidateMigrationBlob(ByteBuffer& blob, uint32& guidOut);
+
         // Save the inventory and gold to the database
         void SaveInventoryAndGoldToDB(); // fast save function for item/money cheating preventing
 
