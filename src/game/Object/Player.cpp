@@ -540,6 +540,7 @@ Player::Player(WorldSession* session): Unit(), m_mover(this), m_camera(this), m_
 
     m_movementAnticheat = NULL;
     m_acPosTimer = 5000;
+    m_clusterVisualTimer = 0; // fire the node indicator shortly after entering world
     m_lastMoveRelayMs = 0;
     m_lastMoveHeartbeatMs = 0;
 
@@ -1598,6 +1599,21 @@ void Player::Update(uint32 update_diff, uint32 p_time)
         else
         {
             m_acPosTimer -= update_diff;
+        }
+    }
+
+    // Cluster visual debug: pulse a per-node SpellVisualKit on this player so it's
+    // visible which node they're on. Runtime-toggleable; inert unless enabled.
+    if (sClusterMgr->IsEnabled() && sClusterMgr->VisualDebugEnabled() && IsInWorld())
+    {
+        if (m_clusterVisualTimer <= update_diff)
+        {
+            m_clusterVisualTimer = sClusterMgr->GetVisualIntervalMs();
+            PlaySpellVisual(sClusterMgr->GetNodeVisualKit(sClusterMgr->GetNodeId()));
+        }
+        else
+        {
+            m_clusterVisualTimer -= update_diff;
         }
     }
 
@@ -21077,6 +21093,10 @@ bool Player::MigrateToNode(uint32 nodeId)
 
     sLog.outString("Cluster: migrating %s (guid %u) to node %u; kicking for reconnect.",
                    GetName(), GetGUIDLow(), nodeId);
+
+    // Visual debug: play the migration burst so the hand-off is visible in-world.
+    if (sClusterMgr->VisualDebugEnabled())
+        PlaySpellVisual(sClusterMgr->GetMigrateVisualKit());
 
     if (GetSession())
         GetSession()->KickPlayer();

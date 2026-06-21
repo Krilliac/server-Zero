@@ -14,7 +14,9 @@
 #include "Database/DatabaseEnv.h"
 
 ClusterMgr::ClusterMgr()
-    : m_enabled(false), m_migrationEnabled(false), m_autoMigrate(false), m_nodeId(1), m_port(0), m_peerPort(0), m_capacity(0),
+    : m_enabled(false), m_migrationEnabled(false), m_autoMigrate(false),
+      m_visualDebug(false), m_visualIntervalMs(6000),
+      m_nodeId(1), m_port(0), m_peerPort(0), m_capacity(0),
       m_heartbeatSec(30), m_host("127.0.0.1"), m_net(NULL)
 {
 }
@@ -24,6 +26,8 @@ void ClusterMgr::LoadConfig()
     m_enabled          = sWorld.getConfig(CONFIG_BOOL_CLUSTER_ENABLE);
     m_migrationEnabled = sWorld.getConfig(CONFIG_BOOL_CLUSTER_MIGRATION);
     m_autoMigrate      = sWorld.getConfig(CONFIG_BOOL_CLUSTER_AUTOMIGRATE);
+    m_visualDebug      = sWorld.getConfig(CONFIG_BOOL_CLUSTER_VISUAL);
+    m_visualIntervalMs = sWorld.getConfig(CONFIG_UINT32_CLUSTER_VISUAL_INTERVAL);
     m_nodeId       = sWorld.getConfig(CONFIG_UINT32_CLUSTER_NODE_ID);
     m_port         = sWorld.getConfig(CONFIG_UINT32_CLUSTER_PORT);
     m_heartbeatSec = sWorld.getConfig(CONFIG_UINT32_CLUSTER_HEARTBEAT);
@@ -68,6 +72,21 @@ uint32 ClusterMgr::GetNodeForZone(uint32 zoneId) const
     std::lock_guard<std::mutex> guard(m_zoneLock);
     std::map<uint32, uint32>::const_iterator it = m_zoneMap.find(zoneId);
     return it != m_zoneMap.end() ? it->second : 0;
+}
+
+uint32 ClusterMgr::GetNodeVisualKit(uint32 nodeId) const
+{
+    // Curated, confirmed-visible SpellVisualKit ids — distinct per node, cycling.
+    static const uint32 palette[] = { 179, 5670, 686, 451, 300, 1027 };
+    static const uint32 count = sizeof(palette) / sizeof(palette[0]);
+    if (nodeId == 0)
+        nodeId = 1;
+    return palette[(nodeId - 1) % count];
+}
+
+uint32 ClusterMgr::GetMigrateVisualKit() const
+{
+    return 224; // distinct burst played when a migration fires
 }
 
 void ClusterMgr::Init()

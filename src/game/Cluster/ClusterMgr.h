@@ -89,6 +89,14 @@ class ClusterMgr
         bool   AutoMigrateEnabled() const { return m_autoMigrate; }
         uint32 GetNodeForZone(uint32 zoneId) const;  // node owning a zone, 0 if unassigned
 
+        // Visual debug: per-node spell-visual indicator + event bursts. The master
+        // flag is runtime-toggleable (.cluster visual) independent of the config.
+        bool   VisualDebugEnabled() const { return m_visualDebug; }
+        void   SetVisualDebug(bool on) { m_visualDebug = on; }
+        uint32 GetVisualIntervalMs() const { return m_visualIntervalMs; }
+        uint32 GetNodeVisualKit(uint32 nodeId) const;  // per-node indicator SpellVisualKit
+        uint32 GetMigrateVisualKit() const;            // migration-event SpellVisualKit
+
         // --- Phase 2: inter-node transport bridge (called by ClusterThread) ---
         bool PopOutbound(std::vector<ClusterOutFrame>& out);          // net thread: drain send queue
         void GetPeers(std::vector<ClusterPeer>& out);                 // net thread: current peer list
@@ -113,6 +121,8 @@ class ClusterMgr
         bool        m_enabled;
         bool        m_migrationEnabled;
         bool        m_autoMigrate;
+        bool        m_visualDebug;
+        uint32      m_visualIntervalMs;
         uint32      m_nodeId;
         uint32      m_port;
         uint32      m_peerPort;  // inter-node listen/connect port

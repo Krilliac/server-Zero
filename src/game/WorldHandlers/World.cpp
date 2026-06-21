@@ -997,6 +997,10 @@ void World::LoadConfigSettings(bool reload)
     // Auto-migrate a player to the node that owns a zone on zone entry (needs
     // EnableMigration too). Maps zones->nodes via the cluster_zone_assignment table.
     setConfig(CONFIG_BOOL_CLUSTER_AUTOMIGRATE,      "Cluster.AutoMigrate", false);
+    // Visual debug: per-node spell-visual indicator on players + a burst on cluster
+    // events (migration). OFF by default; toggleable at runtime via .cluster visual.
+    setConfig(CONFIG_BOOL_CLUSTER_VISUAL,           "Cluster.VisualDebug", false);
+    setConfigMinMax(CONFIG_UINT32_CLUSTER_VISUAL_INTERVAL, "Cluster.Visual.IntervalMs", 6000, 1000, 60000);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.

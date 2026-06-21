@@ -4065,6 +4065,7 @@ class Player : public Unit
         // Anti-Cheat: per-player movement validator (NULL until first use)
         MovementAnticheat* m_movementAnticheat;
         uint32 m_acPosTimer;   // countdown for periodic idle-position re-validation
+        uint32 m_clusterVisualTimer; // countdown for the cluster per-node visual pulse
 
     public:
         // Movement smoothing: server time of the last real movement packet relayed

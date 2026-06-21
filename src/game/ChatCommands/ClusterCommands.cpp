@@ -194,3 +194,33 @@ bool ChatHandler::HandleClusterMigrateCommand(char* args)
                         "(CanMigrate gate / target node id).", name.c_str(), nodeId);
     return true;
 }
+
+bool ChatHandler::HandleClusterVisualCommand(char* args)
+{
+    if (!args || !*args)
+    {
+        PSendSysMessage("Cluster visual debug: %s (this node %u, indicator kit %u). Usage: .cluster visual <on|off>",
+                        sClusterMgr->VisualDebugEnabled() ? "ON" : "off",
+                        sClusterMgr->GetNodeId(),
+                        sClusterMgr->GetNodeVisualKit(sClusterMgr->GetNodeId()));
+        return true;
+    }
+
+    std::string a = args;
+    bool on  = (a == "on"  || a == "1" || a == "enable");
+    bool off = (a == "off" || a == "0" || a == "disable");
+    if (!on && !off)
+    {
+        SendSysMessage("Usage: .cluster visual <on|off>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    sClusterMgr->SetVisualDebug(on);
+    PSendSysMessage("Cluster visual debug %s on node %u (per-node indicator kit %u; migration burst kit %u). "
+                    "Note: applies to this node only — run on each node to toggle cluster-wide.",
+                    on ? "ENABLED" : "disabled", sClusterMgr->GetNodeId(),
+                    sClusterMgr->GetNodeVisualKit(sClusterMgr->GetNodeId()),
+                    sClusterMgr->GetMigrateVisualKit());
+    return true;
+}
