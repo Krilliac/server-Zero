@@ -333,23 +333,20 @@ bool ChatHandler::HandleClusterBoundariesCommand(char* args)
             uint32 node  = sClusterMgr->GetNodeForZone(zone); // 0 = unassigned
             uint32 owner = node ? node : myNode;              // unassigned zones stay on the current node
 
-            DebugVis::Category cat;
-            switch (owner)
-            {
-                case 1:  cat = DebugVis::DV_LOS_BLOCK; break; // node 1 -> red
-                case 2:  cat = DebugVis::DV_LOS_OK;    break; // node 2 -> green
-                case 3:  cat = DebugVis::DV_PATH;      break;
-                case 4:  cat = DebugVis::DV_COLLISION; break;
-                default: cat = DebugVis::DV_GENERIC;   break;
-            }
-            if (owner != myNode)
+            // Colours are RELATIVE to the player's current node: green = this node
+            // (you stay), red = a different node (crossing there migrates you). So
+            // the colours swap when you move across to the other node.
+            bool sameNode = (owner == myNode);
+            DebugVis::Category cat = sameNode ? DebugVis::DV_LOS_OK     // this node  -> green
+                                              : DebugVis::DV_LOS_BLOCK; // other node -> red
+            if (!sameNode)
                 ++otherNode;
 
             char lbl[200];
             snprintf(lbl, sizeof(lbl),
                      "Cluster boundary\nZone %u -> Node %u%s\n(%.1f, %.1f)",
                      zone, owner,
-                     (owner == myNode ? " (this node)" : " (OTHER node - crossing here migrates you)"),
+                     (sameNode ? " (this node - green)" : " (OTHER node - red - crossing migrates you)"),
                      wx, wy);
             if (DebugVis::Marker(player, cat, wx, wy, wz, lbl))
                 ++placed;
