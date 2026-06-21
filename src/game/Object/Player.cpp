@@ -20725,7 +20725,14 @@ namespace
         MSEC_FIELDS   = 3,    // full UpdateFields value array (stats/equipment/flags)
         MSEC_MONEY    = 4,    // money (explicit; redundant with fields, for clarity)
         MSEC_HOMEBIND = 5,    // homebind map/area/x/y/z
-        MSEC_SOCIAL   = 6,    // guildId (+ group key reserved for Phase 6/7)
+        MSEC_SOCIAL     = 6,  // guildId (+ group key reserved for Phase 6/7)
+        MSEC_TIMEREST   = 7,  // played-time totals + rest bonus (not in UpdateFields)
+        MSEC_SPELLS     = 8,  // learned spells (id, active, disabled)
+        MSEC_SKILLS     = 9,  // skill id/value/max
+        MSEC_ACTIONS    = 10, // action-bar buttons
+        MSEC_QUESTS     = 11, // quest status + objective counters
+        MSEC_REPUTATION = 12, // faction standings
+        MSEC_INVENTORY  = 13, // item identity + position (full instance data: Phase 4)
         MSEC_END      = 0xFFFF
     };
 
@@ -20782,6 +20789,128 @@ void Player::SerializeForMigration(ByteBuffer& out)
         b << uint32(GetGuildId());
         b << uint64(0); // group routing key — Phase 6/7
         PutSection(out, MSEC_SOCIAL, b);
+    }
+    {   // time / rest — not part of the UpdateFields array
+        ByteBuffer b;
+        b << uint32(m_Played_time[PLAYED_TIME_TOTAL]);
+        b << uint32(m_Played_time[PLAYED_TIME_LEVEL]);
+        b << float(m_rest_bonus);
+        PutSection(out, MSEC_TIMEREST, b);
+    }
+    {   // spells (learned, non-dependent, not pending removal)
+        ByteBuffer b;
+        std::vector<std::pair<uint32, uint16> > tmp; // id, (active<<8 | disabled)
+        for (PlayerSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+        {
+            PlayerSpell const& ps = itr->second;
+            if (ps.state == PLAYERSPELL_REMOVED || ps.dependent)
+                continue;
+            tmp.push_back(std::make_pair(itr->first,
+                uint16((ps.active ? 0x100 : 0) | (ps.disabled ? 0x1 : 0))));
+        }
+        b << uint32(tmp.size());
+        for (size_t i = 0; i < tmp.size(); ++i)
+        {
+            b << uint32(tmp[i].first);
+            b << uint8((tmp[i].second & 0x100) ? 1 : 0);
+            b << uint8((tmp[i].second & 0x1) ? 1 : 0);
+        }
+        PutSection(out, MSEC_SPELLS, b);
+    }
+    {   // skills
+        ByteBuffer b;
+        std::vector<SkillStatusMap::const_iterator> live;
+        for (SkillStatusMap::const_iterator itr = mSkillStatus.begin(); itr != mSkillStatus.end(); ++itr)
+            if (itr->second.uState != SKILL_DELETED)
+                live.push_back(itr);
+        b << uint32(live.size());
+        for (size_t i = 0; i < live.size(); ++i)
+        {
+            uint32 valueData = GetUInt32Value(PLAYER_SKILL_VALUE_INDEX(live[i]->second.pos));
+            b << uint16(live[i]->first);
+            b << uint16(SKILL_VALUE(valueData));
+            b << uint16(SKILL_MAX(valueData));
+        }
+        PutSection(out, MSEC_SKILLS, b);
+    }
+    {   // action-bar buttons
+        ByteBuffer b;
+        std::vector<ActionButtonList::const_iterator> live;
+        for (ActionButtonList::const_iterator itr = m_actionButtons.begin(); itr != m_actionButtons.end(); ++itr)
+            if (itr->second.uState != ACTIONBUTTON_DELETED)
+                live.push_back(itr);
+        b << uint32(live.size());
+        for (size_t i = 0; i < live.size(); ++i)
+        {
+            b << uint8(live[i]->first);
+            b << uint32(live[i]->second.GetAction());
+            b << uint8(uint8(live[i]->second.GetType()));
+        }
+        PutSection(out, MSEC_ACTIONS, b);
+    }
+    {   // quest status + objective counters
+        ByteBuffer b;
+        b << uint32(mQuestStatus.size());
+        for (QuestStatusMap::const_iterator itr = mQuestStatus.begin(); itr != mQuestStatus.end(); ++itr)
+        {
+            QuestStatusData const& q = itr->second;
+            b << uint32(itr->first);
+            b << uint8(q.m_status);
+            b << uint8(q.m_rewarded ? 1 : 0);
+            b << uint8(q.m_explored ? 1 : 0);
+            for (int k = 0; k < QUEST_OBJECTIVES_COUNT; ++k)
+                b << uint32(q.m_creatureOrGOcount[k]);
+            for (int k = 0; k < QUEST_OBJECTIVES_COUNT; ++k)
+                b << uint32(q.m_itemcount[k]);
+        }
+        PutSection(out, MSEC_QUESTS, b);
+    }
+    {   // reputation standings
+        ByteBuffer b;
+        FactionStateList const& reps = m_reputationMgr.GetStateList();
+        b << uint32(reps.size());
+        for (FactionStateList::const_iterator itr = reps.begin(); itr != reps.end(); ++itr)
+        {
+            b << uint32(itr->second.ID);
+            b << int32(itr->second.Standing);
+            b << uint32(itr->second.Flags);
+        }
+        PutSection(out, MSEC_REPUTATION, b);
+    }
+    {   // inventory — item identity + position (full instance data is Phase 4)
+        ByteBuffer b;
+        std::vector<Item*> found;
+        std::vector<std::pair<uint8, uint8> > pos; // container, slot
+        for (uint8 i = EQUIPMENT_SLOT_START; i < INVENTORY_SLOT_ITEM_END; ++i)
+            if (Item* it = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+            {
+                found.push_back(it);
+                pos.push_back(std::make_pair(uint8(INVENTORY_SLOT_BAG_0), i));
+            }
+        for (uint8 bag = INVENTORY_SLOT_BAG_START; bag < INVENTORY_SLOT_BAG_END; ++bag)
+        {
+            Item* bagItem = GetItemByPos(INVENTORY_SLOT_BAG_0, bag);
+            if (bagItem && bagItem->IsBag())
+            {
+                Bag* pBag = (Bag*)bagItem;
+                for (uint32 j = 0; j < pBag->GetBagSize(); ++j)
+                    if (Item* it = pBag->GetItemByPos(uint8(j)))
+                    {
+                        found.push_back(it);
+                        pos.push_back(std::make_pair(bag, uint8(j)));
+                    }
+            }
+        }
+        b << uint32(found.size());
+        for (size_t i = 0; i < found.size(); ++i)
+        {
+            b << uint8(pos[i].first);
+            b << uint8(pos[i].second);
+            b << uint32(found[i]->GetEntry());
+            b << uint32(found[i]->GetCount());
+            b << uint32(found[i]->GetGUIDLow());
+        }
+        PutSection(out, MSEC_INVENTORY, b);
     }
 
     out << uint16(MSEC_END);
