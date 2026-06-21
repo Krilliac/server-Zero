@@ -15,7 +15,7 @@
 
 ClusterMgr::ClusterMgr()
     : m_enabled(false), m_migrationEnabled(false), m_autoMigrate(false),
-      m_visualDebug(false), m_visualIntervalMs(6000),
+      m_visualDebug(false), m_chatTag(false), m_visualIntervalMs(6000),
       m_nodeId(1), m_port(0), m_peerPort(0), m_capacity(0),
       m_heartbeatSec(30), m_host("127.0.0.1"), m_net(NULL)
 {
@@ -28,6 +28,7 @@ void ClusterMgr::LoadConfig()
     m_autoMigrate      = sWorld.getConfig(CONFIG_BOOL_CLUSTER_AUTOMIGRATE);
     m_visualDebug      = sWorld.getConfig(CONFIG_BOOL_CLUSTER_VISUAL);
     m_visualIntervalMs = sWorld.getConfig(CONFIG_UINT32_CLUSTER_VISUAL_INTERVAL);
+    m_chatTag          = sWorld.getConfig(CONFIG_BOOL_CLUSTER_CHATTAG);
     m_nodeId       = sWorld.getConfig(CONFIG_UINT32_CLUSTER_NODE_ID);
     m_port         = sWorld.getConfig(CONFIG_UINT32_CLUSTER_PORT);
     m_heartbeatSec = sWorld.getConfig(CONFIG_UINT32_CLUSTER_HEARTBEAT);
@@ -87,6 +88,15 @@ uint32 ClusterMgr::GetNodeVisualKit(uint32 nodeId) const
 uint32 ClusterMgr::GetMigrateVisualKit() const
 {
     return 224; // distinct burst played when a migration fires
+}
+
+void ClusterMgr::TagChatMessage(std::string& msg) const
+{
+    if (!m_enabled || !m_chatTag || msg.empty())
+        return;
+    // Prefix with the originating node id; tagged at the source so it survives a
+    // cross-node relay (the receiving node delivers the already-tagged text).
+    msg = "[N" + std::to_string(m_nodeId) + "] " + msg;
 }
 
 void ClusterMgr::Init()

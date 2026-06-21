@@ -1001,6 +1001,9 @@ void World::LoadConfigSettings(bool reload)
     // events (migration). OFF by default; toggleable at runtime via .cluster visual.
     setConfig(CONFIG_BOOL_CLUSTER_VISUAL,           "Cluster.VisualDebug", false);
     setConfigMinMax(CONFIG_UINT32_CLUSTER_VISUAL_INTERVAL, "Cluster.Visual.IntervalMs", 6000, 1000, 60000);
+    // Prefix outgoing player chat with the originating node id ("[N1] ...") for
+    // cluster debugging. OFF by default; runtime-toggleable via .cluster chattag.
+    setConfig(CONFIG_BOOL_CLUSTER_CHATTAG,          "Cluster.Chat.TagNode", false);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.

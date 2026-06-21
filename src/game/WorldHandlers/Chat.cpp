@@ -262,6 +262,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "migration",      SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterMigrationCommand,         "", NULL },
         { "reloadzones",    SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterReloadZonesCommand,       "", NULL },
         { "boundaries",     SEC_GAMEMASTER,     true,  &ChatHandler::HandleClusterBoundariesCommand,        "", NULL },
+        { "chattag",        SEC_GAMEMASTER,     true,  &ChatHandler::HandleClusterChatTagCommand,           "", NULL },
         { NULL,             0,                  false, NULL,                                               "", NULL }
     };
 

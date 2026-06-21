@@ -262,6 +262,7 @@ class ChatHandler
         bool HandleClusterMigrationCommand(char* args);
         bool HandleClusterReloadZonesCommand(char* args);
         bool HandleClusterBoundariesCommand(char* args);
+        bool HandleClusterChatTagCommand(char* args);
 
         // Anti-Cheat framework commands
         bool HandleAntiCheatStatusCommand(char* args);

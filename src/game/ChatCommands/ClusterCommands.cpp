@@ -289,6 +289,27 @@ bool ChatHandler::HandleClusterReloadZonesCommand(char* /*args*/)
     return true;
 }
 
+bool ChatHandler::HandleClusterChatTagCommand(char* args)
+{
+    if (!args || !*args)
+    {
+        PSendSysMessage("Cluster chat-tag: %s (this node %u). Usage: .cluster chattag <on|off>",
+                        sClusterMgr->ChatTagEnabled() ? "ON" : "off", sClusterMgr->GetNodeId());
+        return true;
+    }
+    bool on;
+    if (!ParseOnOff(args, &on))
+    {
+        SendSysMessage("Usage: .cluster chattag <on|off>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    sClusterMgr->SetChatTag(on);
+    PSendSysMessage("Cluster chat-tag %s on node %u (prefixes outgoing chat with [N%u]).",
+                    on ? "ENABLED" : "disabled", sClusterMgr->GetNodeId(), sClusterMgr->GetNodeId());
+    return true;
+}
+
 bool ChatHandler::HandleClusterBoundariesCommand(char* args)
 {
     Player* player = m_session ? m_session->GetPlayer() : NULL;

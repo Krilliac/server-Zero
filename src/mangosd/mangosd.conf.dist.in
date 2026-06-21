@@ -1950,6 +1950,8 @@ TimeSync.Desync.Threshold    = 1000
 #       Cluster.VisualDebug       per-node spell-visual indicator on players + a burst on
 #                                 migration; runtime-toggleable via .cluster visual on|off
 #       Cluster.Visual.IntervalMs node-indicator pulse cadence in ms (default 6000)
+#       Cluster.Chat.TagNode      prefix outgoing player chat with "[N<id>] " for
+#                                 cluster debugging (runtime-toggleable: .cluster chattag)
 Cluster.Enable               = 0
 Cluster.NodeID               = 1
 Cluster.Host                 = 127.0.0.1
@@ -1960,6 +1962,7 @@ Cluster.EnableMigration      = 0
 Cluster.AutoMigrate          = 0
 Cluster.VisualDebug          = 0
 Cluster.Visual.IntervalMs    = 6000
+Cluster.Chat.TagNode         = 0
 
 #    Debug Visualizer (Slice 2) — diagnostic only, no gameplay effect.
 #    When enabled (requires AntiCheat.Enable=1) the server spawns temporary,

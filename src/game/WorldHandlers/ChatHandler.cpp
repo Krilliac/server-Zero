@@ -42,6 +42,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "World.h"
+#include "ClusterMgr.h"
 #include "Opcodes.h"
 #include "ObjectMgr.h"
 #include "Chat.h"
@@ -222,6 +223,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
         {
             std::string msg;
             recv_data >> msg;
+            sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
 
             if (msg.empty())
             {
@@ -289,6 +291,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
             std::string to, msg;
             recv_data >> to;
             recv_data >> msg;
+            sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
 
             if (msg.empty())
             {

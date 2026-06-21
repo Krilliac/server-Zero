@@ -100,6 +100,11 @@ class ClusterMgr
         uint32 GetNodeVisualKit(uint32 nodeId) const;  // per-node indicator SpellVisualKit
         uint32 GetMigrateVisualKit() const;            // migration-event SpellVisualKit
 
+        // Chat node-tag: prefix outgoing chat with "[N<id>] " for cluster debugging.
+        bool   ChatTagEnabled() const { return m_chatTag; }
+        void   SetChatTag(bool on) { m_chatTag = on; }
+        void   TagChatMessage(std::string& msg) const; // prepend "[N<id>] " if enabled
+
         // --- Phase 2: inter-node transport bridge (called by ClusterThread) ---
         bool PopOutbound(std::vector<ClusterOutFrame>& out);          // net thread: drain send queue
         void GetPeers(std::vector<ClusterPeer>& out);                 // net thread: current peer list
@@ -125,6 +130,7 @@ class ClusterMgr
         bool        m_migrationEnabled;
         bool        m_autoMigrate;
         bool        m_visualDebug;
+        bool        m_chatTag;
         uint32      m_visualIntervalMs;
         uint32      m_nodeId;
         uint32      m_port;
