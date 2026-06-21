@@ -646,13 +646,13 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recv_data)
     }
 
     // Cluster: node-affinity enforcement. A character migrated to another node
-    // (characters.cluster_node set) must be played on that node — refuse here so a
-    // shared-DB character is never loaded on the wrong node. The player should
-    // select the realm that maps to its assigned node. (cluster_node 0 = any node.)
+    // (a row in cluster_character_node) must be played on that node — refuse here so
+    // a shared-DB character is never loaded on the wrong node. The player should
+    // select the realm that maps to its assigned node. (no row = any node.)
     if (sClusterMgr->IsEnabled())
     {
         QueryResult* res = CharacterDatabase.PQuery(
-            "SELECT `cluster_node` FROM `characters` WHERE `guid`=%u", playerGuid.GetCounter());
+            "SELECT `node_id` FROM `cluster_character_node` WHERE `guid`=%u", playerGuid.GetCounter());
         if (res)
         {
             uint32 assigned = (*res)[0].GetUInt32();

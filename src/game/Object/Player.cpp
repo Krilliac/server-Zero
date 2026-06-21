@@ -21087,9 +21087,11 @@ bool Player::MigrateToNode(uint32 nodeId)
     SerializeForMigration(blob);
     sClusterMgr->SendPlayerTransfer(nodeId, GetGUIDLow(), blob);
 
-    // Record the assignment so login routing sends the player to the target node.
-    CharacterDatabase.PExecute("UPDATE `characters` SET `cluster_node`=%u WHERE `guid`=%u",
-                               nodeId, GetGUIDLow());
+    // Record the assignment in a dedicated table (NOT the characters row, which the
+    // imminent logout SaveToDB rewrites and would wipe). Authoritative for login
+    // node-affinity routing.
+    CharacterDatabase.PExecute("REPLACE INTO `cluster_character_node` (`guid`,`node_id`) VALUES (%u,%u)",
+                               GetGUIDLow(), nodeId);
 
     sLog.outString("Cluster: migrating %s (guid %u) to node %u; kicking for reconnect.",
                    GetName(), GetGUIDLow(), nodeId);
