@@ -1933,6 +1933,22 @@ TimeSync.Enable              = 1
 TimeSync.EWMA.Alpha          = 20
 TimeSync.Desync.Threshold    = 1000
 
+#    Multi-node Cluster framework.
+#    OFF by default: the server runs as a single standalone node and none of the
+#    cluster code paths execute. When enabled, this node registers itself in the
+#    `cluster_nodes` table (login DB) and heartbeats its liveness so other nodes
+#    and realmd can discover live peers and route by load.
+#       Cluster.Enable            master switch (default 0)
+#       Cluster.NodeID            unique id of this node, 1..255 (default 1)
+#       Cluster.Host              address peers/clients reach this node on
+#       Cluster.Port              world port advertised in the registry (0=unset)
+#       Cluster.HeartbeatSeconds  liveness heartbeat interval (default 30)
+Cluster.Enable               = 0
+Cluster.NodeID               = 1
+Cluster.Host                 = 127.0.0.1
+Cluster.Port                 = 8085
+Cluster.HeartbeatSeconds     = 30
+
 #    Debug Visualizer (Slice 2) — diagnostic only, no gameplay effect.
 #    When enabled (requires AntiCheat.Enable=1) the server spawns temporary,
 #    colour-coded gameobjects trailing players to visualise the detection

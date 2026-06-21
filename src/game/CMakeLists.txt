@@ -73,6 +73,10 @@ source_group("vmaps" FILES ${SRC_GRP_VMAPS})
 file(GLOB SRC_GRP_ANTICHEAT AntiCheat/*.cpp AntiCheat/*.h)
 source_group("AntiCheat" FILES ${SRC_GRP_ANTICHEAT})
 
+#Cluster group
+file(GLOB SRC_GRP_CLUSTER Cluster/*.cpp Cluster/*.h)
+source_group("Cluster" FILES ${SRC_GRP_CLUSTER})
+
 #DebugVis group
 file(GLOB SRC_GRP_DEBUGVIS DebugVis/*.cpp DebugVis/*.h)
 source_group("DebugVis" FILES ${SRC_GRP_DEBUGVIS})
@@ -244,6 +248,7 @@ add_library(game STATIC
     ${SRC_GRP_TOOL}
     ${SRC_GRP_VMAPS}
     ${SRC_GRP_ANTICHEAT}
+    ${SRC_GRP_CLUSTER}
     ${SRC_GRP_DEBUGVIS}
     ${SRC_GRP_WARDEN}
     ${SRC_GRP_WARDEN_MODULES}
@@ -256,6 +261,7 @@ target_include_directories(game
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         AntiCheat
+        Cluster
         DebugVis
         AuctionHouseBot
         BattleGround

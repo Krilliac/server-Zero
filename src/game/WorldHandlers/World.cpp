@@ -111,6 +111,7 @@
 
 // ANTICHEAT
 #include "AntiCheatMgr.h"
+#include "ClusterMgr.h"
 #include "PerformanceMonitor.h"
 
 #include <iostream>
@@ -982,6 +983,14 @@ void World::LoadConfigSettings(bool reload)
     setConfigMinMax(CONFIG_UINT32_MOVEMENT_SWIM_RATE,        "Movement.SwimSpeedRate", 100, 10, 1000);
     setConfigMinMax(CONFIG_UINT32_MOVEMENT_WALK_RATE,        "Movement.WalkSpeedRate", 100, 10, 1000);
 
+    // Multi-node cluster framework. OFF by default: the server runs as a single
+    // standalone node. When enabled, this node registers in `cluster_nodes` and
+    // heartbeats its liveness so peers/realmd can discover it.
+    setConfig(CONFIG_BOOL_CLUSTER_ENABLE,           "Cluster.Enable", false);
+    setConfigMinMax(CONFIG_UINT32_CLUSTER_NODE_ID,  "Cluster.NodeID", 1, 1, 255);
+    setConfigMinMax(CONFIG_UINT32_CLUSTER_PORT,     "Cluster.Port", 0, 0, 65535);
+    setConfigMinMax(CONFIG_UINT32_CLUSTER_HEARTBEAT,"Cluster.HeartbeatSeconds", 30, 5, 3600);
+
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.
     setConfig(CONFIG_BOOL_ACDBG_ENABLE,             "DebugVisualizer.Enable", false);
@@ -1620,6 +1629,9 @@ void World::SetInitialWorldSettings()
     // for Anti-Cheat maintenance (idle score pruning)
     m_timers[WUPDATE_ANTICHEAT].SetInterval(30 * IN_MILLISECONDS); // every 30 sec
 
+    // for Cluster node heartbeat (liveness in the shared node registry)
+    m_timers[WUPDATE_CLUSTER].SetInterval(getConfig(CONFIG_UINT32_CLUSTER_HEARTBEAT) * IN_MILLISECONDS);
+
     // for AutoBroadcast
     sLog.outString("Starting AutoBroadcast System");
     if (m_broadcastEnable)
@@ -1676,6 +1688,11 @@ void World::SetInitialWorldSettings()
     // Initialize Anti-Cheat / Movement-Validation framework (inert unless enabled)
     sLog.outString("Initializing Anti-Cheat framework...");
     sAntiCheatMgr->Init();
+    sLog.outString();
+
+    // Initialize multi-node cluster framework (inert unless enabled)
+    sLog.outString("Initializing Cluster framework...");
+    sClusterMgr->Init();
     sLog.outString();
 
     sLog.outString("Deleting expired bans...");
@@ -1949,6 +1966,13 @@ void World::Update(uint32 diff)
     {
         sAntiCheatMgr->Update(m_timers[WUPDATE_ANTICHEAT].GetCurrent());
         m_timers[WUPDATE_ANTICHEAT].Reset();
+    }
+
+    /// <li> Handle Cluster node heartbeat
+    if (m_timers[WUPDATE_CLUSTER].Passed())
+    {
+        sClusterMgr->Update(m_timers[WUPDATE_CLUSTER].GetCurrent());
+        m_timers[WUPDATE_CLUSTER].Reset();
     }
 
 #ifdef ENABLE_PLAYERBOTS

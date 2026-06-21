@@ -43,6 +43,7 @@
 
 #include "Map.h"
 #include "MapManager.h"
+#include "ClusterMgr.h"
 #include "Player.h"
 #include "GridNotifiers.h"
 #include "Log.h"
@@ -639,6 +640,9 @@ bool Map::Add(Player* player)
     {
         i_data->OnPlayerEnter(player);
     }
+
+    // Cluster: record this player as owned by this node (inert unless enabled).
+    sClusterMgr->RegisterPlayer(player->GetGUIDLow());
 
     return true;
 }

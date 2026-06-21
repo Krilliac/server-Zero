@@ -53,6 +53,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "Player.h"
+#include "ClusterMgr.h"
 #include "AntiCheatMgr.h"
 #include "ObjectMgr.h"
 #include "Group.h"
@@ -729,6 +730,9 @@ void WorldSession::LogoutPlayer(bool Save)
         {
             _player->SaveToDB();
         }
+
+        // Cluster: player is leaving this node; drop it from the local registry.
+        sClusterMgr->UnregisterPlayer(_player->GetGUIDLow());
 
         ///- Leave all channels before player delete...
         _player->CleanupChannels();

@@ -61,6 +61,7 @@
 #include "Timer.h"
 #include "World.h"
 #include "AntiCheatMgr.h"
+#include "ClusterMgr.h"
 #include "MovementAnticheat.h"
 #include "MapManager.h"
 #include "Transports.h"
@@ -382,6 +383,10 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recv_data)
     data << mover->GetPackGUID();             // write guid
     movementInfo.Write(data);                               // write data
     mover->SendMessageToSetExcept(&data, _player);
+
+    // Cluster: also fan this move out to peer nodes (Phase 1: no-op scaffold).
+    if (plMover)
+        sClusterMgr->RelayMovement(plMover, opcode, movementInfo);
 
     // Movement smoothing: mark when a real movement packet was last relayed for this
     // mover, so Player::Update can detect a stale mover and inject heartbeats.
