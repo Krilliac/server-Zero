@@ -81,6 +81,13 @@ SMSG_CHAR_ENUM = 0x3B
 # Enter-world: the gateway intercepts this to resolve character->node affinity.
 CMSG_PLAYER_LOGIN = 0x3D
 
+# The decisive proof opcode. SMSG_LOGIN_VERIFY_WORLD (0x236) is sent by the node
+# when a player enters the world -- once at the initial login, and AGAIN on the
+# transparent migration arrival (node B's loading-screen resume, commit 3b4ece5b).
+# Observing it a SECOND time on the SAME, never-reconnected connection is the
+# whole point of the gateway: transparent transfer.
+SMSG_LOGIN_VERIFY_WORLD = 0x236
+
 
 # --- AuthCrypt port (classic: key = raw 40-byte K) -------------------------
 
@@ -326,26 +333,100 @@ def main():
     sock.sendall(login_hdr_enc + login_payload)
     print("PLAYER_LOGIN sent (guid=%d)" % guid)
 
-    # Drain a few in-world replies with a short timeout; the goal is to give the
-    # nodes time to process the login and emit their logs, not to fully parse the
-    # world stream (decrypting it past this point is out of scope for the proof).
+    # --- 7. CONTINUOUS READER (the migration proof loop) -------------------
+    # This is the heart of the Phase 3 mechanical proof. After CMSG_PLAYER_LOGIN
+    # the node floods us with the in-world login packets (spells, items, auras,
+    # initial world state, etc.). The header AuthCrypt is STATEFUL -- its recv_i
+    # / recv_j counters advance one step per encrypted header byte -- so we MUST
+    # decrypt EVERY server->client 4-byte header IN ORDER, then consume the exact
+    # decrypted payload length, or the cipher desyncs and every subsequent header
+    # decodes to garbage. We therefore never skip a packet: read header (4 bytes)
+    # -> decrypt -> read (size-2) payload -> log -> repeat, forever, with a short
+    # socket timeout so the loop keeps spinning (and the connection stays OPEN)
+    # while the operator triggers the migration over SOAP on another channel.
+    #
+    # We do NOT reconnect, re-auth, or re-send char-select. The SAME socket that
+    # logged in on node A stays open the whole time; when node B resumes us it
+    # sends a SECOND SMSG_LOGIN_VERIFY_WORLD down this very stream. Catching that
+    # 0x236 a second time -- crypt still in sync -- is transparent transfer.
+    import time as _time
+
+    def _ts():
+        return _time.strftime("%H:%M:%S")
+
+    verify_world_count = 0
+    pkt_count = 0
+    # Run until an overall wall-clock budget elapses (the test harness triggers
+    # the migration well within this) or, if RUN_SECONDS is given, that long.
+    run_seconds = float(os.environ.get("RUN_SECONDS", "120"))
+    started = _time.time()
     sock.settimeout(2)
-    replies = 0
+
+    print("[%s] CONTINUOUS READER START (staying crypt-synced through the login "
+          "flood; connection held open for migration)" % _ts())
+    sys.stdout.flush()
+
+    while _time.time() - started < run_seconds:
+        try:
+            enc_hdr = recv_exact(sock, 4)
+        except socket.timeout:
+            # No data this interval -- normal between the login flood and the
+            # migration. Keep the connection open and keep waiting.
+            continue
+        except RuntimeError as e:
+            print("[%s] READER: connection closed by server (%s) after %d packet(s), "
+                  "%d LOGIN_VERIFY_WORLD seen" % (_ts(), e, pkt_count, verify_world_count))
+            break
+
+        dh = crypt.decrypt_recv(enc_hdr)
+        rsize = struct.unpack(">H", dh[0:2])[0]
+        ropcode = struct.unpack("<H", dh[2:4])[0]
+        # Read the rest of the payload by the DECRYPTED size (size counts the
+        # 2-byte opcode field, so body = size - 2). A wrong size here is the
+        # tell-tale of a crypt desync; guard against an absurd length.
+        if rsize < 2 or rsize > 0x20000:
+            print("[%s] READER DESYNC? implausible size=%d opcode=0x%X (enc_hdr=%s "
+                  "dec_hdr=%s recv_i=%d) -- crypt likely lost sync; aborting reader"
+                  % (_ts(), rsize, ropcode, enc_hdr.hex(), dh.hex(), crypt.recv_i))
+            sock.close()
+            return 1
+        try:
+            _body = recv_exact(sock, rsize - 2) if rsize > 2 else b""
+        except (socket.timeout, RuntimeError) as e:
+            print("[%s] READER: failed reading body for opcode 0x%X size=%d (%s)"
+                  % (_ts(), ropcode, rsize, e))
+            break
+
+        pkt_count += 1
+        if os.environ.get("GW_DEBUG"):
+            print("[%s] pkt opcode=0x%04X size=%d" % (_ts(), ropcode, rsize))
+            sys.stdout.flush()
+
+        if ropcode == SMSG_LOGIN_VERIFY_WORLD:
+            verify_world_count += 1
+            mapid = struct.unpack("<I", _body[0:4])[0] if len(_body) >= 4 else -1
+            if verify_world_count == 1:
+                print("[%s] *** SMSG_LOGIN_VERIFY_WORLD #1 (INITIAL LOGIN on node A) "
+                      "map=%d *** -- in world; now holding the connection open, "
+                      "waiting for the migration resume." % (_ts(), mapid))
+            else:
+                print("[%s] *** SMSG_LOGIN_VERIFY_WORLD #%d (MIGRATION RESUME) map=%d "
+                      "*** <<< TRANSPARENT TRANSFER PROVEN: the SAME connection "
+                      "received the world-enter again with NO reconnect / re-auth / "
+                      "char-select. >>>" % (_ts(), verify_world_count, mapid))
+            sys.stdout.flush()
+
+    print("[%s] CONTINUOUS READER END: %d packet(s) read, "
+          "%d SMSG_LOGIN_VERIFY_WORLD received." % (_ts(), pkt_count, verify_world_count))
+    sys.stdout.flush()
     try:
-        while replies < 50:
-            enc = recv_exact(sock, 4)
-            dh = crypt.decrypt_recv(enc)
-            rs = struct.unpack(">H", dh[0:2])[0]
-            ro = struct.unpack("<H", dh[2:4])[0]
-            _ = recv_exact(sock, rs - 2) if rs >= 2 else b""
-            replies += 1
-            if os.environ.get("GW_DEBUG"):
-                print("DEBUG: post-login reply opcode=0x%X size=%d" % (ro, rs))
-    except (socket.timeout, RuntimeError):
+        sock.close()
+    except Exception:
         pass
-    print("POST_LOGIN drained %d reply packet(s)" % replies)
-    sock.close()
-    return 0
+    # Exit 0 only if we saw the resume (>=2). Exit 2 = logged in but no migration
+    # observed within the budget (still useful: distinguishes "never migrated"
+    # from a crypt desync, which exits 1 above).
+    return 0 if verify_world_count >= 2 else 2
 
 
 if __name__ == "__main__":
