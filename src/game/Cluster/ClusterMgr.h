@@ -83,6 +83,17 @@ class ClusterMgr
 
         bool   IsMigrationEnabled() const { return m_migrationEnabled; }
         void   SetMigrationEnabled(bool on) { m_migrationEnabled = on; } // runtime toggle
+
+        // --- Phase 7b: cross-node battleground queue (shared-DB-centric) ---
+        // Gated on IsEnabled() && IsMigrationEnabled() && m_crossNodeBG; every method
+        // below early-returns when off, so single-node BG is unaffected.
+        bool   IsCrossNodeBG() const { return m_enabled && m_migrationEnabled && m_crossNodeBG; }
+        // Write/refresh this player's row in cluster_bg_queue (on BG-queue join).
+        void   PublishBgQueueJoin(uint32 guidLow, std::string const& name, uint32 team,
+                                  uint32 bgTypeId, uint32 bracketId, bool asGroup,
+                                  uint32 groupId, uint32 level);
+        void   RemoveBgQueueEntry(uint32 guidLow);   // delete this player's row (leave/port-in)
+        void   ClearOwnBgQueueEntries();             // delete every row this node owns (shutdown)
         // Phase 4: hand a serialized player blob to a specific target node (directed).
         void   SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffer const& blob);
 
@@ -130,6 +141,9 @@ class ClusterMgr
         // Phase 5: zone-affinity auto-migration.
         bool   AutoMigrateEnabled() const { return m_autoMigrate; }
         void   SetAutoMigrate(bool on) { m_autoMigrate = on; }          // runtime toggle
+
+        bool   AutoFailoverEnabled() const { return m_autoFailover; }
+        void   SetAutoFailover(bool on) { m_autoFailover = on; }        // runtime toggle
         uint32 GetNodeForZone(uint32 zoneId) const;  // node owning a zone, 0 if unassigned
         void   ReloadZoneMap() { LoadZoneMap(); }    // re-read cluster_zone_assignment live
 
@@ -172,6 +186,14 @@ class ClusterMgr
         void   GetOnlineSurvivors(std::vector<uint32>& out); // online node ids, ascending
         void   RunFailoverSweep();                   // reassign offline-owned zones/affinities
 
+        // Phase 7b matchmaker (coordinator-only): read cluster_bg_queue, form matches
+        // per (bg_type_id,bracket_id) at the template min-per-team, pick a host via
+        // GetOptimalNode(), and mark chosen rows status='matched',host_node=host.
+        void   RunBgMatchmaker();
+        // Phase 7b convergence (every node): migrate matched local players whose host
+        // is a different node to the host (reuses Player::MigrateToNode).
+        void   RunBgConvergence();
+
         void RefreshPeers();     // world thread: rebuild m_peers from cluster_nodes
         void DrainInbound();     // world thread: process queued inbound frames
         void LoadServiceConfig(); // Phase 8: read Cluster.Service.* role owners
@@ -184,6 +206,7 @@ class ClusterMgr
         bool        m_autoFailover; // Cluster.AutoFailover: heal cluster when a peer dies
         bool        m_visualDebug;
         bool        m_chatTag;
+        bool        m_crossNodeBG; // Phase 7b: cross-node BG queue master gate
         uint32      m_visualIntervalMs;
         uint32      m_svcAnnounceNode; // Phase 8: owner of CLUSTER_SERVICE_ANNOUNCE (0=local)
         uint32      m_nodeId;

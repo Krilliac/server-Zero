@@ -262,6 +262,29 @@ bool ChatHandler::HandleClusterAutoMigrateCommand(char* args)
     return true;
 }
 
+bool ChatHandler::HandleClusterFailoverCommand(char* args)
+{
+    if (!args || !*args)
+    {
+        PSendSysMessage("Cluster auto-failover: %s (this node %u). Usage: .cluster failover <on|off>. "
+                        "When on, the coordinator (lowest online node) reassigns offline-owned zones "
+                        "and clears their character affinities each tick.",
+                        sClusterMgr->AutoFailoverEnabled() ? "ON" : "off", sClusterMgr->GetNodeId());
+        return true;
+    }
+    bool on;
+    if (!ParseOnOff(args, &on))
+    {
+        SendSysMessage("Usage: .cluster failover <on|off>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    sClusterMgr->SetAutoFailover(on);
+    PSendSysMessage("Cluster auto-failover %s on node %u (applies to this node only).",
+                    on ? "ENABLED" : "disabled", sClusterMgr->GetNodeId());
+    return true;
+}
+
 bool ChatHandler::HandleClusterMigrationCommand(char* args)
 {
     if (!args || !*args)

@@ -1004,6 +1004,11 @@ void World::LoadConfigSettings(bool reload)
     // Prefix outgoing player chat with the originating node id ("[N1] ...") for
     // cluster debugging. OFF by default; runtime-toggleable via .cluster chattag.
     setConfig(CONFIG_BOOL_CLUSTER_CHATTAG,          "Cluster.Chat.TagNode", false);
+    // Phase 7b: cross-node battleground queue. OFF by default. When enabled (and the
+    // cluster + migration are enabled), BG-queue joins are published to the shared
+    // cluster_bg_queue table; the coordinator forms cross-node matches and converges
+    // players to a host node via the existing migration. Off = single-node BG behaviour.
+    setConfig(CONFIG_BOOL_CLUSTER_CROSSNODE_BG,     "Cluster.CrossNodeBG", false);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.

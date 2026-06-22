@@ -43,6 +43,7 @@
 #include "WorldSession.h"
 #include "Object.h"
 #include "Chat.h"
+#include "Cluster/ClusterMgr.h"   // Phase 7b: publish/remove cross-node BG queue rows
 #include "BattleGroundMgr.h"
 #include "BattleGroundWS.h"
 #include "BattleGround.h"
@@ -277,6 +278,31 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPacket& recv_data)
         DEBUG_LOG("Battleground: player joined queue for bg queue type %u bg type %u: GUID %u, NAME %s", bgQueueTypeId, bgTypeId, _player->GetGUIDLow(), _player->GetName());
     }
     sBattleGroundMgr.ScheduleQueueUpdate(bgQueueTypeId, bgTypeId, _player->GetBattleGroundBracketIdFromLevel(bgTypeId));
+
+    // Phase 7b: also publish the queued player(s) to the shared cross-node BG queue.
+    // No-op unless Cluster.CrossNodeBG (and the cluster + migration) are enabled, so
+    // single-node behaviour is unchanged: the player is in the LOCAL queue exactly as
+    // before, plus an advisory row in cluster_bg_queue when clustering is on.
+    if (sClusterMgr->IsCrossNodeBG())
+    {
+        BattleGroundBracketId pubBracket = _player->GetBattleGroundBracketIdFromLevel(bgTypeId);
+        if (joinAsGroup && grp)
+        {
+            for (GroupReference* itr = grp->GetFirstMember(); itr != NULL; itr = itr->next())
+            {
+                Player* member = itr->getSource();
+                if (!member)
+                    continue;
+                sClusterMgr->PublishBgQueueJoin(member->GetGUIDLow(), member->GetName(),
+                    member->GetTeam(), bgTypeId, pubBracket, true, grp->GetId(), member->getLevel());
+            }
+        }
+        else
+        {
+            sClusterMgr->PublishBgQueueJoin(_player->GetGUIDLow(), _player->GetName(),
+                _player->GetTeam(), bgTypeId, pubBracket, false, 0, _player->getLevel());
+        }
+    }
 }
 
 /**
@@ -513,6 +539,8 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recv_data)
             _player->GetSession()->SendPacket(&data);
             // remove battleground queue status from BGmgr
             bgQueue.RemovePlayer(_player->GetObjectGuid(), false);
+            // Phase 7b: player is entering the BG; drop the shared cross-node queue row.
+            sClusterMgr->RemoveBgQueueEntry(_player->GetGUIDLow());
             // this is still needed here if battleground "jumping" shouldn't add deserter debuff
             // also this is required to prevent stuck at old battleground after SetBattleGroundId set to new
             if (BattleGround* currentBg = _player->GetBattleGround())
@@ -534,6 +562,8 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recv_data)
             _player->RemoveBattleGroundQueueId(bgQueueTypeId);  // must be called this way, because if you move this call to queue->removeplayer, it causes bugs
             sBattleGroundMgr.BuildBattleGroundStatusPacket(&data, bg, queueSlot, STATUS_NONE, 0, 0);
             bgQueue.RemovePlayer(_player->GetObjectGuid(), true);
+            // Phase 7b: drop the shared cross-node queue row (no-op when disabled).
+            sClusterMgr->RemoveBgQueueEntry(_player->GetGUIDLow());
             // player left queue, we should update it
             sBattleGroundMgr.ScheduleQueueUpdate(bgQueueTypeId, bgTypeId, _player->GetBattleGroundBracketIdFromLevel(bgTypeId));
             SendPacket(&data);
