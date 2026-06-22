@@ -103,6 +103,17 @@ class NodeRegistry
         /// from a link thread on inbound GW_CLIENT_PACKET.
         ClientSocket* FindClient(uint32 clientId);
 
+        /// Resolve the backend node that owns the character @p guidLow (the low
+        /// 32 bits of the player guid). Mirrors the mangosd login-affinity check
+        /// in CharacterHandler::HandlePlayerLoginOpcode:
+        ///   1) cluster_character_node(guid -> node_id) in the character DB; a
+        ///      row with node_id > 0 wins.
+        ///   2) else characters.zone (character DB) -> cluster_zone_assignment
+        ///      (login DB: zone_id -> node_id); a row with node_id > 0 wins.
+        ///   3) else 0 (unknown -> caller keeps the client on its current node).
+        /// Runs DB queries inline; call only from a context that may block on DB.
+        uint32 NodeForCharacter(uint32 guidLow);
+
     private:
         // nodeId -> link. std::map keeps ids ordered so PreWorldNode/lowest-id
         // queries are a simple begin()/ordered scan.

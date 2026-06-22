@@ -76,6 +76,12 @@ extern DatabaseType LoginDatabase;
 #ifndef GATEWAY_AUTH_OK
 #define GATEWAY_AUTH_OK 0x0C
 #endif
+/// CMSG_PLAYER_LOGIN: the client's "enter world" request. Payload is a single
+/// uint64 player guid (little-endian). The gateway intercepts this to route the
+/// session to the character's owning node before forwarding.
+#ifndef GATEWAY_CMSG_PLAYER_LOGIN
+#define GATEWAY_CMSG_PLAYER_LOGIN 0x3D
+#endif
 
 #if defined( __GNUC__ )
 #pragma pack(1)
@@ -110,6 +116,7 @@ ClientSocket::ClientSocket(void)
     : ClientHandler(),
     m_ClientId(++s_ClientIdCounter),
     m_SessionOpened(false),
+    m_CurrentNodeId(0),
     m_Address(),
     m_Crypt(),
     m_Seed(rand32()),
@@ -315,13 +322,19 @@ int ClientSocket::handle_close(ACE_HANDLE h, ACE_Reactor_Mask)
     {
         m_SessionOpened = false;
 
-        // Phase 2 / Task 1: route via the registry's pre-world node. Task 2 adds
-        // per-client current-node tracking and will release to Get(m_CurrentNodeId).
+        // Phase 2 / Task 2: release the session on the node that currently
+        // fronts this client (m_CurrentNodeId), not necessarily the pre-world
+        // node — the client may have been re-homed at CMSG_PLAYER_LOGIN.
         ByteBuffer releaseMsg;
         releaseMsg << uint32(m_ClientId);
-        if (NodeLink* link = sNodeRegistry().PreWorldNode())
+        if (NodeLink* link = sNodeRegistry().Get(m_CurrentNodeId))
         {
             link->SendFrame(GW_SESSION_RELEASE, releaseMsg); // best-effort
+        }
+        else
+        {
+            DEBUG_LOG("ClientSocket: GW_SESSION_RELEASE for client %u not sent: node %u link unavailable",
+                m_ClientId, m_CurrentNodeId);
         }
 
         sNodeRegistry().UnregisterClient(m_ClientId);
@@ -457,6 +470,16 @@ int ClientSocket::handle_input_payload(void)
     }
     else
     {
+        // Phase 2 / Task 3: intercept CMSG_PLAYER_LOGIN (enter-world). Resolve
+        // the character's owning node and, if it differs from the node currently
+        // fronting this player-less session, re-home: release on the old node and
+        // open on the target. This is cheap (no player loaded yet). The login
+        // packet itself is then forwarded to the now-current node below.
+        if (opcode == GATEWAY_CMSG_PLAYER_LOGIN)
+        {
+            HandlePlayerLogin(recv);
+        }
+
         // Post-auth: subsequent packets arrive with their headers decrypted
         // (handle_input_header runs DecryptRecv now that m_Crypt is keyed). The
         // decrypted plaintext packet is tunnelled to the backend node as a
@@ -470,13 +493,13 @@ int ClientSocket::handle_input_payload(void)
             fwd.append(recv.contents(), payloadLen);
         }
 
-        // Phase 2 / Task 1: forward to the registry's pre-world node. Task 2 adds
-        // per-client current-node tracking and routes to Get(m_CurrentNodeId).
-        NodeLink* link = sNodeRegistry().PreWorldNode();
+        // Route to the node that currently fronts this client (m_CurrentNodeId),
+        // which CMSG_PLAYER_LOGIN above may have just re-homed.
+        NodeLink* link = sNodeRegistry().Get(m_CurrentNodeId);
         if (!link || !link->SendFrame(GW_CLIENT_PACKET, fwd))
         {
-            DEBUG_LOG("ClientSocket: drop opcode 0x%04X from client %u (acct %u): node link down",
-                opcode, m_ClientId, m_AccountId);
+            DEBUG_LOG("ClientSocket: drop opcode 0x%04X from client %u (acct %u): node %u link down",
+                opcode, m_ClientId, m_AccountId, m_CurrentNodeId);
         }
     }
 
@@ -590,27 +613,107 @@ int ClientSocket::HandleAuthSession(ByteBuffer& recv)
     // client. The send is best-effort: if the node is down it fails gracefully
     // (logged) and the gateway keeps serving the already-authed client.
     //
-    // Phase 2 / Task 1: the pre-world node (lowest connected id) fronts the
-    // session through char-enum. Task 2 records m_CurrentNodeId per client and
-    // re-homes at CMSG_PLAYER_LOGIN; for now everything routes to PreWorldNode().
+    // Phase 2 / Task 2: the pre-world node (lowest connected id) fronts the
+    // session through char-enum. m_CurrentNodeId records which node fronts this
+    // client; CMSG_PLAYER_LOGIN may re-home it to the character's owning node.
     sNodeRegistry().RegisterClient(m_ClientId, this);
     m_SessionOpened = true;
 
+    NodeLink* preWorld = sNodeRegistry().PreWorldNode();
+    m_CurrentNodeId = preWorld ? preWorld->NodeId() : 1;
+
+    NodeLink* link = sNodeRegistry().Get(m_CurrentNodeId);
+    if (!link || !link->SendFrame(GW_SESSION_OPEN, BuildSessionOpen()))
+    {
+        sLog.outError("ClientSocket: GW_SESSION_OPEN for client %u (acct %u) not delivered to node %u (node link down)",
+            m_ClientId, m_AccountId, m_CurrentNodeId);
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Build the GW_SESSION_OPEN payload for this client.
+ *
+ * Layout mirrors GatewayProtocol.h: uint32 clientId, uint32 accountId,
+ * uint32 security, uint8 locale, string accountName. Reused both at auth
+ * (initial pre-world open) and at CMSG_PLAYER_LOGIN re-home (open on the
+ * character's owning node).
+ */
+ByteBuffer ClientSocket::BuildSessionOpen() const
+{
     ByteBuffer openMsg;
     openMsg << uint32(m_ClientId);
     openMsg << uint32(m_AccountId);
     openMsg << uint32(m_Security);
     openMsg << uint8(m_Locale);
     openMsg << m_AccountName;
+    return openMsg;
+}
 
-    NodeLink* link = sNodeRegistry().PreWorldNode();
-    if (!link || !link->SendFrame(GW_SESSION_OPEN, openMsg))
+/**
+ * @brief Resolve a CMSG_PLAYER_LOGIN target node and re-home if needed.
+ *
+ * Reads the low 32 bits of the 8-byte player guid from the (un-consumed) login
+ * payload, asks the registry which node owns that character, and — if it is a
+ * different, reachable node than the one currently fronting this session —
+ * releases the player-less session on the old node and opens it on the target,
+ * updating m_CurrentNodeId. The caller forwards the login packet afterwards, so
+ * this does NOT touch @p recv's read position.
+ *
+ * @param recv The CMSG_PLAYER_LOGIN payload (read pointer at the start).
+ */
+void ClientSocket::HandlePlayerLogin(const ByteBuffer& recv)
+{
+    // Payload is a single little-endian uint64 guid; we only need the low dword.
+    if (recv.size() < 8)
     {
-        sLog.outError("ClientSocket: GW_SESSION_OPEN for client %u (acct %u) not delivered (node link down)",
-            m_ClientId, m_AccountId);
+        sLog.outError("ClientSocket: client %u sent a short CMSG_PLAYER_LOGIN (%u bytes); ignoring affinity routing",
+            m_ClientId, (uint32)recv.size());
+        return;
     }
 
-    return 0;
+    const uint8* p = recv.contents();
+    uint32 guidLow = (uint32)p[0]
+                   | ((uint32)p[1] << 8)
+                   | ((uint32)p[2] << 16)
+                   | ((uint32)p[3] << 24);
+
+    uint32 target = sNodeRegistry().NodeForCharacter(guidLow);
+
+    if (target == 0 || !sNodeRegistry().Get(target))
+    {
+        sLog.outString("gateway: char %u: no/unknown affinity, staying on node %u",
+            guidLow, m_CurrentNodeId);
+        return;
+    }
+
+    if (target == m_CurrentNodeId)
+    {
+        return; // already on the owning node; nothing to do
+    }
+
+    sLog.outString("gateway: routing char %u to node %u (re-home from %u)",
+        guidLow, target, m_CurrentNodeId);
+
+    // Release the player-less session on the old node (best-effort).
+    if (NodeLink* oldLink = sNodeRegistry().Get(m_CurrentNodeId))
+    {
+        ByteBuffer releaseMsg;
+        releaseMsg << uint32(m_ClientId);
+        oldLink->SendFrame(GW_SESSION_RELEASE, releaseMsg);
+    }
+
+    // Open the session on the target node, carrying the same account identity
+    // captured at auth (GW_SESSION_OPEN payload is rebuilt from this client).
+    NodeLink* newLink = sNodeRegistry().Get(target);
+    if (!newLink || !newLink->SendFrame(GW_SESSION_OPEN, BuildSessionOpen()))
+    {
+        sLog.outError("ClientSocket: re-home GW_SESSION_OPEN for client %u (char %u) to node %u failed (link down)",
+            m_ClientId, guidLow, target);
+    }
+
+    m_CurrentNodeId = target;
 }
 
 /**

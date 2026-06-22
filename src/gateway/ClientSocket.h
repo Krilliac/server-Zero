@@ -137,6 +137,15 @@ class ClientSocket : protected ClientHandler
         /// Must be called with m_OutBufferLock held.
         int iSendPacket(uint16 opcode, const ByteBuffer& payload);
 
+        /// Serialize the GW_SESSION_OPEN payload (clientId, accountId, security,
+        /// locale, accountName) for this client. Used at auth and on re-home.
+        ByteBuffer BuildSessionOpen() const;
+
+        /// Intercept CMSG_PLAYER_LOGIN: read the character guid, resolve its
+        /// owning node and re-home the (player-less) session there if needed.
+        /// Does not consume @p recv (the caller forwards the login afterwards).
+        void HandlePlayerLogin(const ByteBuffer& recv);
+
     private:
         /// Process-wide monotonic source for m_ClientId.
         static std::atomic<uint32> s_ClientIdCounter;
@@ -146,6 +155,12 @@ class ClientSocket : protected ClientHandler
 
         /// True once GW_SESSION_OPEN has been registered/sent for this client.
         bool m_SessionOpened;
+
+        /// The backend node that currently fronts this (player-less) session.
+        /// Set at auth to the pre-world node; re-homed at CMSG_PLAYER_LOGIN to
+        /// the character's owning node. All post-auth GW_CLIENT_PACKET /
+        /// GW_SESSION_RELEASE frames route to sNodeRegistry().Get(this).
+        uint32 m_CurrentNodeId;
 
         /// Address of the remote peer.
         std::string m_Address;

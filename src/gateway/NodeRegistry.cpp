@@ -35,7 +35,14 @@
 #include "Config/Config.h"
 #include "Log.h"
 
+#include "Database/DatabaseEnv.h"
+
 #include <sstream>
+
+/// Shared-DB accessors (defined in Main.cpp). The gateway opens both the login
+/// (realmd) and character (characters) databases at boot for affinity lookups.
+extern DatabaseType LoginDatabase;
+extern DatabaseType CharacterDatabase;
 
 NodeRegistry::NodeRegistry()
     : m_nodes(), m_clients(), m_clientsMutex(), m_secret()
@@ -171,6 +178,48 @@ ClientSocket* NodeRegistry::FindClient(uint32 clientId)
     ACE_GUARD_RETURN(ACE_Thread_Mutex, guard, m_clientsMutex, NULL);
     std::map<uint32, ClientSocket*>::iterator it = m_clients.find(clientId);
     return it != m_clients.end() ? it->second : NULL;
+}
+
+uint32 NodeRegistry::NodeForCharacter(uint32 guidLow)
+{
+    // 1) Direct character->node affinity. node_id 0 (or no row) means "any node",
+    //    matching CharacterHandler::HandlePlayerLoginOpcode's semantics.
+    if (QueryResult* res = CharacterDatabase.PQuery(
+            "SELECT `node_id` FROM `cluster_character_node` WHERE `guid`=%u", guidLow))
+    {
+        uint32 nodeId = (*res)[0].GetUInt32();
+        delete res;
+        if (nodeId != 0)
+        {
+            return nodeId;
+        }
+    }
+
+    // 2) Zone-based fallback: the character's current zone -> owning node.
+    uint32 zone = 0;
+    if (QueryResult* res = CharacterDatabase.PQuery(
+            "SELECT `zone` FROM `characters` WHERE `guid`=%u", guidLow))
+    {
+        zone = (*res)[0].GetUInt32();
+        delete res;
+    }
+
+    if (zone != 0)
+    {
+        if (QueryResult* res = LoginDatabase.PQuery(
+                "SELECT `node_id` FROM `cluster_zone_assignment` WHERE `zone_id`=%u", zone))
+        {
+            uint32 nodeId = (*res)[0].GetUInt32();
+            delete res;
+            if (nodeId != 0)
+            {
+                return nodeId;
+            }
+        }
+    }
+
+    // 3) Unknown: caller keeps the client on its current (pre-world) node.
+    return 0;
 }
 
 NodeRegistry& sNodeRegistry()
