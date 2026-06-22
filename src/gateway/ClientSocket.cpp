@@ -66,6 +66,13 @@ extern DatabaseType LoginDatabase;
 #ifndef GATEWAY_CMSG_AUTH_SESSION
 #define GATEWAY_CMSG_AUTH_SESSION 0x1ED
 #endif
+#ifndef GATEWAY_SMSG_AUTH_RESPONSE
+#define GATEWAY_SMSG_AUTH_RESPONSE 0x1EE
+#endif
+/// AUTH_OK response code (mirrors AuthResponseCodes::AUTH_OK).
+#ifndef GATEWAY_AUTH_OK
+#define GATEWAY_AUTH_OK 0x0C
+#endif
 
 #if defined( __GNUC__ )
 #pragma pack(1)
@@ -504,6 +511,18 @@ int ClientSocket::HandleAuthSession(ByteBuffer& recv)
     m_Locale      = locale;
 
     sLog.outString("gateway: client %s authed (acct %u)", account.c_str(), id);
+
+    // Signal success on the wire. m_Crypt is now keyed, so iSendPacket's
+    // EncryptSend scrambles this response's 4-byte server header. The body is
+    // a single AUTH_OK byte, matching SMSG_AUTH_RESPONSE's minimal classic form.
+    ByteBuffer response;
+    response << uint8(GATEWAY_AUTH_OK);
+    if (SendPacket(GATEWAY_SMSG_AUTH_RESPONSE, response) == -1)
+    {
+        sLog.outError("ClientSocket::HandleAuthSession: failed to send SMSG_AUTH_RESPONSE to %s",
+            m_Address.c_str());
+        return -1;
+    }
 
     return 0;
 }
