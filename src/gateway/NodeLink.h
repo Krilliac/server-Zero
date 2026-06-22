@@ -66,9 +66,11 @@ class NodeLink : public ACE_Task_Base
         NodeLink();
         virtual ~NodeLink();
 
-        /// Configure (host/port) and start the link thread. The thread keeps
-        /// (re)connecting until Stop() is called. Returns 0 on success.
-        int Start(const std::string& host, uint16 port);
+        /// Configure (host/port/secret) and start the link thread. The thread
+        /// keeps (re)connecting until Stop() is called. The secret is sent as the
+        /// GW_HELLO first frame on every (re)connect to authenticate the link.
+        /// Returns 0 on success.
+        int Start(const std::string& host, uint16 port, const std::string& secret);
 
         /// Request the link thread to exit and join it.
         void Stop();
@@ -91,6 +93,7 @@ class NodeLink : public ACE_Task_Base
 
     private:
         bool connectToNode();          // one blocking connect attempt
+        bool sendHello();              // send GW_HELLO{secret} as the first frame
         void dropConnection();         // close + mark disconnected
         void receiveLoop();            // blocking recv + frame reassembly
         void parseFrames();            // consume complete frames from m_recvBuf
@@ -98,6 +101,7 @@ class NodeLink : public ACE_Task_Base
 
         std::string   m_host;
         uint16        m_port;
+        std::string   m_secret;        // pre-shared link secret sent in GW_HELLO
         volatile bool m_running;
         volatile bool m_connected;
 

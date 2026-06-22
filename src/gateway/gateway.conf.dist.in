@@ -25,6 +25,22 @@ ConfVersion=@MANGOS_REALM_VER@
 #    Node.N.GatewayPort
 #        Per-node connection info for the cluster mesh (used in later tasks)
 #
+#    Gateway.Secret
+#        Pre-shared secret that authenticates the gateway -> node link. It MUST
+#        be identical to Gateway.Secret in EACH fronted node's mangosd.conf. The
+#        gateway sends it as the first frame (GW_HELLO) on every (re)connect; the
+#        node validates it with a constant-time compare and drops the link on any
+#        mismatch. FAIL-CLOSED: if a node is configured but this is empty, the
+#        gateway refuses to connect (logs an error). Use a long random value.
+#        Default: "" (node link disabled until set)
+#
+#    Gateway.IntakeBindIP
+#        (Node-side setting; documented here for symmetry.) On each node this is
+#        the address its intake binds to — 127.0.0.1 by default, so the gateway
+#        must reach the node over loopback/localhost. Set it in the node's
+#        mangosd.conf, not here. Keep the gateway on the same host as the node it
+#        fronts unless you have changed the node's bind IP intentionally.
+#
 #    LogFile
 #        Logfile name
 #        Default: "Gateway.log"
@@ -47,6 +63,8 @@ GatewayPort            = 8085
 
 Node.1.Host            = 127.0.0.1
 Node.1.GatewayPort     = 9100
+
+Gateway.Secret         = ""
 
 LogFile                = "Gateway.log"
 PidFile                = ""

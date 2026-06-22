@@ -40,6 +40,28 @@
 #include "ByteBuffer.h"
 #include "SharedDefines.h"
 
+#include <string>
+
+// ---------------------------------------------------------------------------
+// Constant-time string compare. Compares over the MAXIMUM of the two lengths
+// (folding any length difference into the accumulator) and XOR-accumulates every
+// byte WITHOUT early-returning on the first mismatch, so the running time does
+// not leak how many leading bytes matched. Used to validate the gateway link
+// secret. There is no equivalent helper under src/shared/Auth, so it lives here.
+// ---------------------------------------------------------------------------
+static bool ConstTimeEquals(std::string const& a, std::string const& b)
+{
+    size_t maxLen = a.size() > b.size() ? a.size() : b.size();
+    unsigned int diff = (unsigned int)(a.size() ^ b.size());
+    for (size_t i = 0; i < maxLen; ++i)
+    {
+        unsigned char ca = i < a.size() ? (unsigned char)a[i] : 0;
+        unsigned char cb = i < b.size() ? (unsigned char)b[i] : 0;
+        diff |= (unsigned int)(ca ^ cb);
+    }
+    return diff == 0;
+}
+
 // ---------------------------------------------------------------------------
 // GatewayLink — the gateway's accepted connection (one per socket; in practice
 // a single active link). Parses the [uint32 len][uint8 type][payload] frame
@@ -52,29 +74,35 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
     public:
         friend class ACE_Acceptor<GatewayLink, ACE_SOCK_ACCEPTOR>;
 
-        GatewayLink() : Base()
+        GatewayLink() : Base(), m_authenticated(false)
         {
             reference_counting_policy().value(ACE_Event_Handler::Reference_Counting_Policy::ENABLED);
         }
 
         int open(void* /*unused*/) override
         {
+            ACE_INET_Addr remote;
+            bool haveRemote = (peer().get_remote_addr(remote) != -1);
+            m_remoteIp = haveRemote ? remote.get_host_addr() : "unknown";
+
+            // Defense in depth: when the intake is bound to loopback, refuse any
+            // peer that is not itself loopback. Cheap belt-and-suspenders on top
+            // of the bind; skipped when the operator chose a non-loopback bind.
+            if (haveRemote && sGatewayIntake.LoopbackOnly() && !remote.is_loopback())
+            {
+                sLog.outError("Gateway intake: rejecting non-loopback connection from %s (intake is localhost-only)",
+                              m_remoteIp.c_str());
+                return -1; // reactor closes us
+            }
+
             if (reactor()->register_handler(this, ACE_Event_Handler::READ_MASK) == -1)
             {
                 sLog.outError("GatewayLink::open: register_handler failed");
                 return -1;
             }
 
-            ACE_INET_Addr remote;
-            if (peer().get_remote_addr(remote) != -1)
-            {
-                sLog.outString("Gateway intake: accepted gateway connection from %s:%u",
-                               remote.get_host_addr(), remote.get_port_number());
-            }
-            else
-            {
-                sLog.outString("Gateway intake: accepted gateway connection");
-            }
+            sLog.outString("Gateway intake: accepted gateway connection from %s:%u (awaiting GW_HELLO)",
+                           m_remoteIp.c_str(), haveRemote ? remote.get_port_number() : 0);
 
             sGatewayIntake.SetActiveLink(this);
             return 0;
@@ -89,6 +117,8 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
 
             m_buf.insert(m_buf.end(), tmp, tmp + got);
             parseFrames();
+            if (m_wantClose)
+                return -1; // a rejected/unauthenticated frame asked us to drop the link
             return 0;
         }
 
@@ -128,6 +158,9 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
                 const uint8* payload = p + GatewayFrame::HEADER_SIZE;
                 dispatch(type, payload, len);
                 off += GatewayFrame::HEADER_SIZE + len;
+
+                if (m_wantClose)
+                    break; // stop parsing once we've decided to drop the link
             }
 
             if (off)
@@ -143,8 +176,30 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
 
             try
             {
+                // Until the link authenticates, the ONLY acceptable frame is
+                // GW_HELLO. Never read accountId/security or create a session on
+                // an unauthenticated link: any other type drops the connection.
+                if (!m_authenticated)
+                {
+                    if (type == GW_HELLO)
+                    {
+                        handleHello(in);
+                    }
+                    else
+                    {
+                        sLog.outError("Gateway intake: first frame from %s was type %u, not GW_HELLO; closing unauthenticated link",
+                                      m_remoteIp.c_str(), type);
+                        m_wantClose = true;
+                    }
+                    return;
+                }
+
                 switch (type)
                 {
+                    case GW_HELLO:
+                        // Already authenticated; a second HELLO is unexpected but harmless.
+                        DEBUG_LOG("GatewayLink: ignoring duplicate GW_HELLO from %s", m_remoteIp.c_str());
+                        break;
                     case GW_SESSION_OPEN:    handleSessionOpen(in);    break;
                     case GW_CLIENT_PACKET:   handleClientPacket(in);   break;
                     case GW_SESSION_RELEASE: handleSessionRelease(in); break;
@@ -158,6 +213,31 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
             {
                 sLog.outError("GatewayLink: malformed frame (type %u, %u bytes) from gateway", type, len);
             }
+        }
+
+        // GW_HELLO: string secret, uint32 protocolVersion.
+        // Validates the pre-shared secret with a constant-time compare. On match
+        // the link becomes authenticated; on mismatch the link is closed.
+        void handleHello(ByteBuffer& in)
+        {
+            std::string secret;
+            in >> secret;
+            uint32 version = 0;
+            if (in.rpos() + sizeof(uint32) <= in.size())
+                in >> version; // version is optional for forward-compat
+
+            std::string const& expected = sGatewayIntake.Secret();
+            if (!ConstTimeEquals(secret, expected))
+            {
+                sLog.outError("Gateway intake: GW_HELLO from %s presented an INVALID secret; closing the link",
+                              m_remoteIp.c_str());
+                m_wantClose = true;
+                return;
+            }
+
+            m_authenticated = true;
+            sLog.outString("Gateway intake: gateway link authenticated from %s (protocol version %u)",
+                           m_remoteIp.c_str(), version);
         }
 
         // GW_SESSION_OPEN: uint32 clientId, uint32 accountId, uint32 security,
@@ -240,6 +320,9 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
         }
 
         std::vector<uint8> m_buf;
+        bool               m_authenticated;       // set true once GW_HELLO validates
+        bool               m_wantClose = false;   // dispatch asks handle_input to drop the link
+        std::string        m_remoteIp;            // peer IP, for log lines
 };
 
 // ---------------------------------------------------------------------------
@@ -253,7 +336,8 @@ GatewayIntake& GatewayIntake::Instance()
 
 GatewayIntake::GatewayIntake()
     : m_reactor(NULL), m_acceptor(NULL), m_listenAddr(), m_running(false),
-      m_port(0), m_activeLink(NULL)
+      m_port(0), m_bindIp("127.0.0.1"), m_secret(), m_loopbackOnly(true),
+      m_activeLink(NULL)
 {
 }
 
@@ -262,7 +346,7 @@ GatewayIntake::~GatewayIntake()
     Stop();
 }
 
-bool GatewayIntake::Start(uint16 port)
+bool GatewayIntake::Start(uint16 port, const std::string& bindIp, const std::string& secret)
 {
     if (port == 0)
         return false; // gated off
@@ -270,10 +354,24 @@ bool GatewayIntake::Start(uint16 port)
     if (m_running)
         return true;
 
-    m_port = port;
-    if (m_listenAddr.set((u_short)port, (ACE_UINT32)INADDR_ANY) == -1)
+    // Fail closed: an intake port without a shared secret is an open auth-bypass
+    // door, so refuse to start rather than accept unauthenticated gateway links.
+    if (secret.empty())
     {
-        sLog.outError("Gateway intake: cannot build listen address for port %u", port);
+        sLog.outError("Gateway.IntakePort set but Gateway.Secret is empty — refusing to start the gateway intake; set a shared secret on both the node and the gateway");
+        return false;
+    }
+
+    m_port   = port;
+    m_secret = secret;
+    m_bindIp = bindIp.empty() ? std::string("127.0.0.1") : bindIp;
+    m_loopbackOnly = (m_bindIp == "127.0.0.1" || m_bindIp == "::1");
+
+    // Bind to the configured IP (localhost by default) instead of INADDR_ANY so
+    // the intake is not exposed on every interface.
+    if (m_listenAddr.set((u_short)port, m_bindIp.c_str()) == -1)
+    {
+        sLog.outError("Gateway intake: cannot build listen address %s:%u", m_bindIp.c_str(), port);
         return false;
     }
 
@@ -301,7 +399,8 @@ bool GatewayIntake::Start(uint16 port)
         return false;
     }
 
-    sLog.outString("Gateway intake: listening for the cluster gateway on port %u (plaintext pre-authed sessions).", port);
+    sLog.outString("Gateway intake: listening for the cluster gateway on %s:%u (secret-authenticated, plaintext pre-authed sessions).",
+                   m_bindIp.c_str(), port);
     return true;
 }
 

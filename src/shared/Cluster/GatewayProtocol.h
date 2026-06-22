@@ -43,6 +43,13 @@
  *                          gateway -> node = the client's (decrypted) packet
  *                          node -> gateway = the server's packet for that client
  *   GW_SESSION_RELEASE : uint32 clientId
+ *   GW_HELLO           : string secret, uint32 protocolVersion
+ *                        Link-authentication handshake. The gateway MUST send
+ *                        this as the very first frame after connecting; the node
+ *                        compares the secret (constant-time) against its
+ *                        configured Gateway.Secret before honoring any other
+ *                        frame. Until this succeeds the link is unauthenticated
+ *                        and every other frame type is rejected.
  *
  * Types 4-7 are reserved for later phases (prepare/ready/migrate hand-off) and
  * are unused in Phase 1.
@@ -63,7 +70,11 @@ enum GatewayMsg
     GW_SESSION_READY   = 5, // (reserved, later phase) target node signals the session is staged
     GW_MIGRATE_REQUEST = 6, // (reserved, later phase) ask the gateway to flip a client to a new node
     GW_MIGRATE_ABORT   = 7, // (reserved, later phase) cancel an in-flight migration
+    GW_HELLO           = 8, // gateway -> node: link authentication (pre-shared secret + protocol version); MUST be the first frame
 };
+
+// Protocol version carried in GW_HELLO; bump if the wire format changes.
+static const uint32 GW_PROTOCOL_VERSION = 1;
 
 namespace GatewayFrame
 {

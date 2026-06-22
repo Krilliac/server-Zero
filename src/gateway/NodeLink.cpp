@@ -44,7 +44,7 @@
 #include "Log.h"
 
 NodeLink::NodeLink()
-    : m_host(), m_port(0), m_running(false), m_connected(false)
+    : m_host(), m_port(0), m_secret(), m_running(false), m_connected(false)
 {
 }
 
@@ -53,10 +53,11 @@ NodeLink::~NodeLink()
     Stop();
 }
 
-int NodeLink::Start(const std::string& host, uint16 port)
+int NodeLink::Start(const std::string& host, uint16 port, const std::string& secret)
 {
     m_host    = host;
     m_port    = port;
+    m_secret  = secret;
     m_running = true;
 
     if (activate(THR_NEW_LWP | THR_JOINABLE, 1) == -1)
@@ -136,6 +137,24 @@ bool NodeLink::connectToNode()
     m_connected = true;
     m_recvBuf.clear();
     sLog.outString("NodeLink: connected to node %s:%u", m_host.c_str(), m_port);
+    return true;
+}
+
+bool NodeLink::sendHello()
+{
+    // GW_HELLO must be the very first frame on the link: string secret, then the
+    // protocol version. The node validates the secret (constant-time) before it
+    // will honor any session frame; until then nothing else is sent.
+    ByteBuffer payload;
+    payload << m_secret;
+    payload << (uint32)GW_PROTOCOL_VERSION;
+
+    if (!SendFrame((uint8)GW_HELLO, payload))
+    {
+        sLog.outError("NodeLink: failed to send GW_HELLO to node %s:%u", m_host.c_str(), m_port);
+        return false;
+    }
+    sLog.outString("NodeLink: sent GW_HELLO (link authentication) to node %s:%u", m_host.c_str(), m_port);
     return true;
 }
 
@@ -261,6 +280,14 @@ int NodeLink::svc()
             {
                 ACE_OS::sleep(ACE_Time_Value(0, 100000)); // 100 ms slices, ~3s total
             }
+            continue;
+        }
+
+        // Authenticate the link FIRST: send GW_HELLO before any session traffic.
+        // If it fails the connection is already broken; drop and reconnect.
+        if (!sendHello())
+        {
+            dropConnection();
             continue;
         }
 

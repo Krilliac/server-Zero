@@ -1723,8 +1723,12 @@ void World::SetInitialWorldSettings()
         uint32 intakePort = sConfig.GetIntDefault("Gateway.IntakePort", 0);
         if (intakePort > 0 && intakePort <= 65535)
         {
+            std::string intakeBindIp = sConfig.GetStringDefault("Gateway.IntakeBindIP", "127.0.0.1");
+            std::string gatewaySecret = sConfig.GetStringDefault("Gateway.Secret", "");
             sLog.outString("Starting Gateway intake...");
-            sGatewayIntake.Start((uint16)intakePort);
+            // Start() fails closed (logs an ERROR and does not listen) when the
+            // shared secret is empty, so we never open an unauthenticated intake.
+            sGatewayIntake.Start((uint16)intakePort, intakeBindIp, gatewaySecret);
             sLog.outString();
         }
     }

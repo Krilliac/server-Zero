@@ -59,6 +59,7 @@
 #include <deque>
 #include <vector>
 #include <mutex>
+#include <string>
 
 class GatewayLink;
 class WorldSession;
@@ -79,14 +80,24 @@ class GatewayIntake : public ACE_Task_Base
         static GatewayIntake& Instance();
 
         /// Start the intake listener on the given port (no-op if port == 0 or
-        /// already running). Returns true if the listener is up afterwards.
-        bool Start(uint16 port);
+        /// already running). Binds to bindIp (localhost-only by default) and
+        /// requires every accepted link to authenticate with a GW_HELLO carrying
+        /// `secret` before any session frame is honored. Returns true if the
+        /// listener is up afterwards.
+        bool Start(uint16 port, const std::string& bindIp, const std::string& secret);
 
         /// Stop the listener thread and tear down all fronted sessions. Safe to
         /// call when not running.
         void Stop();
 
         bool IsRunning() const { return m_running; }
+
+        // ---- link authentication (read by GatewayLink on the net thread) ----
+        // The shared secret the gateway must present in GW_HELLO.
+        const std::string& Secret() const { return m_secret; }
+        // True when the intake was bound to loopback (enables the belt-and-
+        // suspenders remote-address check in GatewayLink::open).
+        bool LoopbackOnly() const { return m_loopbackOnly; }
 
         // ACE_Task_Base
         int svc() override;
@@ -121,6 +132,9 @@ class GatewayIntake : public ACE_Task_Base
         ACE_INET_Addr    m_listenAddr;
         volatile bool    m_running;
         uint16           m_port;
+        std::string      m_bindIp;       // configured Gateway.IntakeBindIP
+        std::string      m_secret;       // configured Gateway.Secret (link auth)
+        bool             m_loopbackOnly; // true when bound to 127.0.0.1
 
         // clientId -> fronted WorldSession. Touched on the network thread only.
         std::map<uint32, WorldSession*> m_sessions;

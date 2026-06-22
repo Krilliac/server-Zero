@@ -1974,7 +1974,28 @@ Cluster.Chat.TagNode         = 0
 #        Cluster.* switches above; it only needs to be set on nodes fronted by a
 #        gateway.
 #        Default: 0 (off)
+#
+#    Gateway.IntakeBindIP
+#        IP address the intake listener binds to. Defaults to 127.0.0.1 so the
+#        intake is reachable ONLY from the local host — the gateway should run on
+#        the same machine (or reach the node over a private/loopback link). Only
+#        change this to a non-loopback address if you fully understand that it
+#        exposes the intake on that interface. When bound to 127.0.0.1 the node
+#        additionally refuses any connection whose peer is not loopback.
+#        Default: "127.0.0.1"
+#
+#    Gateway.Secret
+#        Pre-shared secret that authenticates the gateway -> node link. It MUST
+#        be identical to Gateway.Secret in the gateway's gateway.conf. The
+#        gateway sends it in the first frame (GW_HELLO); the node validates it
+#        with a constant-time compare and closes the link on any mismatch.
+#        FAIL-CLOSED: if Gateway.IntakePort > 0 but this is empty, the intake
+#        does NOT start (the node logs an error) — there is no unauthenticated
+#        mode. Use a long random value.
+#        Default: "" (intake disabled until set)
 Gateway.IntakePort           = 0
+Gateway.IntakeBindIP         = "127.0.0.1"
+Gateway.Secret               = ""
 
 #    Debug Visualizer (Slice 2) — diagnostic only, no gameplay effect.
 #    When enabled (requires AntiCheat.Enable=1) the server spawns temporary,
