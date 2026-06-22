@@ -31,6 +31,17 @@ import sys
 HOST = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8085
 
+# Optional: a character guid to enter-world with after char-enum. When given
+# (3rd positional arg or LOGIN_GUID env), the client sends CMSG_PLAYER_LOGIN so
+# the gateway resolves the character's owning node and re-homes the session if
+# needed. This drives the Phase 2 end-to-end affinity-routing proof.
+def _login_guid():
+    if len(sys.argv) > 3:
+        return int(sys.argv[3])
+    env = os.environ.get("LOGIN_GUID")
+    return int(env) if env else None
+
+
 ACCOUNT = "ADMINISTRATOR"
 BUILD = 5875
 
@@ -66,6 +77,9 @@ AUTH_OK = 0x0C
 # Round-trip opcodes (session-handled, so they traverse the full tunnel).
 CMSG_CHAR_ENUM = 0x37
 SMSG_CHAR_ENUM = 0x3B
+
+# Enter-world: the gateway intercepts this to resolve character->node affinity.
+CMSG_PLAYER_LOGIN = 0x3D
 
 
 # --- AuthCrypt port (classic: key = raw 40-byte K) -------------------------
@@ -281,12 +295,57 @@ def main():
             continue
         if ropcode == SMSG_CHAR_ENUM:
             char_count = rbody[0] if rbody else 0
-            sock.close()
             print("ROUNDTRIP PASS (chars=%d)" % char_count)
-            return 0
+            break
         print("ROUNDTRIP FAIL: unexpected opcode 0x%X (size=%d) before "
               "SMSG_CHAR_ENUM" % (ropcode, rsize))
         return 1
+
+    # --- 6. Optional: enter world with CMSG_PLAYER_LOGIN -------------------
+    # This is the Phase 2 affinity-routing trigger. The gateway peeks the guid,
+    # asks the registry which node owns it (cluster_character_node), and re-homes
+    # the player-less session to that node before forwarding the login. The
+    # in-world packet flood that follows is not fully processed here -- we just
+    # send the login and drain a few replies so the node/gateway logs can show
+    # where the character landed.
+    guid = _login_guid()
+    if guid is None:
+        sock.close()
+        return 0
+
+    # Payload: a single little-endian uint64 player guid.
+    login_payload = struct.pack("<Q", guid)
+    login_cmd_len = 4 + len(login_payload)  # size counts the 4-byte opcode field
+    login_hdr_plain = (struct.pack(">H", login_cmd_len)
+                       + struct.pack("<I", CMSG_PLAYER_LOGIN))
+    login_hdr_enc = crypt.encrypt_send(login_hdr_plain)
+    if os.environ.get("GW_DEBUG"):
+        print("DEBUG: login guid=%d hdr plain=%s enc=%s payload=%s"
+              % (guid, login_hdr_plain.hex(), login_hdr_enc.hex(),
+                 login_payload.hex()))
+    sock.sendall(login_hdr_enc + login_payload)
+    print("PLAYER_LOGIN sent (guid=%d)" % guid)
+
+    # Drain a few in-world replies with a short timeout; the goal is to give the
+    # nodes time to process the login and emit their logs, not to fully parse the
+    # world stream (decrypting it past this point is out of scope for the proof).
+    sock.settimeout(2)
+    replies = 0
+    try:
+        while replies < 50:
+            enc = recv_exact(sock, 4)
+            dh = crypt.decrypt_recv(enc)
+            rs = struct.unpack(">H", dh[0:2])[0]
+            ro = struct.unpack("<H", dh[2:4])[0]
+            _ = recv_exact(sock, rs - 2) if rs >= 2 else b""
+            replies += 1
+            if os.environ.get("GW_DEBUG"):
+                print("DEBUG: post-login reply opcode=0x%X size=%d" % (ro, rs))
+    except (socket.timeout, RuntimeError):
+        pass
+    print("POST_LOGIN drained %d reply packet(s)" % replies)
+    sock.close()
+    return 0
 
 
 if __name__ == "__main__":
