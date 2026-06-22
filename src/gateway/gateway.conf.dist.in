@@ -21,9 +21,25 @@ ConfVersion=@MANGOS_REALM_VER@
 #        Port on which the gateway accepts inbound client connections
 #        Default: 8085
 #
+#    Node.Count
+#        Number of backend mangosd nodes the gateway connects to. The gateway
+#        opens one authenticated link per node (Node.1 .. Node.<Count>).
+#        Default: 1
+#
 #    Node.N.Host
-#    Node.N.GatewayPort
-#        Per-node connection info for the cluster mesh (used in later tasks)
+#    Node.N.IntakePort
+#        Per-node connection info: the host + gateway-intake TCP port of backend
+#        node N. IntakePort MUST match that node's mangosd.conf Gateway.IntakePort.
+#        (The legacy Phase 1 key Node.N.GatewayPort is still accepted as an alias
+#        for IntakePort, but new configs should use IntakePort.)
+#        Example 2-node setup (two mangosd on loopback):
+#            Node.Count          = 2
+#            Node.1.Host         = 127.0.0.1
+#            Node.1.IntakePort   = 9100
+#            Node.2.Host         = 127.0.0.1
+#            Node.2.IntakePort   = 9101
+#        The pre-world node (where a freshly-authed client attaches) is the
+#        lowest-numbered node that is currently connected.
 #
 #    Gateway.Secret
 #        Pre-shared secret that authenticates the gateway -> node link. It MUST
@@ -61,8 +77,14 @@ CharacterDatabaseInfo  = "127.0.0.1;3306;root;mangos;character0"
 
 GatewayPort            = 8085
 
+Node.Count             = 1
+
 Node.1.Host            = 127.0.0.1
-Node.1.GatewayPort     = 9100
+Node.1.IntakePort      = 9100
+
+# Example second node (enable by raising Node.Count to 2):
+# Node.2.Host           = 127.0.0.1
+# Node.2.IntakePort     = 9101
 
 Gateway.Secret         = ""
 

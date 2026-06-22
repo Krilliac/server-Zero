@@ -46,6 +46,7 @@
 #include "ClientSocketMgr.h"
 #include "GatewayAuth.h"
 #include "NodeLink.h"
+#include "NodeRegistry.h"
 #include "Cluster/GatewayProtocol.h"
 
 #include "Common.h"
@@ -314,11 +315,16 @@ int ClientSocket::handle_close(ACE_HANDLE h, ACE_Reactor_Mask)
     {
         m_SessionOpened = false;
 
+        // Phase 2 / Task 1: route via the registry's pre-world node. Task 2 adds
+        // per-client current-node tracking and will release to Get(m_CurrentNodeId).
         ByteBuffer releaseMsg;
         releaseMsg << uint32(m_ClientId);
-        sNodeLink->SendFrame(GW_SESSION_RELEASE, releaseMsg); // best-effort
+        if (NodeLink* link = sNodeRegistry().PreWorldNode())
+        {
+            link->SendFrame(GW_SESSION_RELEASE, releaseMsg); // best-effort
+        }
 
-        sNodeLink->UnregisterClient(m_ClientId);
+        sNodeRegistry().UnregisterClient(m_ClientId);
     }
 
     {
@@ -464,7 +470,10 @@ int ClientSocket::handle_input_payload(void)
             fwd.append(recv.contents(), payloadLen);
         }
 
-        if (!sNodeLink->SendFrame(GW_CLIENT_PACKET, fwd))
+        // Phase 2 / Task 1: forward to the registry's pre-world node. Task 2 adds
+        // per-client current-node tracking and routes to Get(m_CurrentNodeId).
+        NodeLink* link = sNodeRegistry().PreWorldNode();
+        if (!link || !link->SendFrame(GW_CLIENT_PACKET, fwd))
         {
             DEBUG_LOG("ClientSocket: drop opcode 0x%04X from client %u (acct %u): node link down",
                 opcode, m_ClientId, m_AccountId);
@@ -576,11 +585,15 @@ int ClientSocket::HandleAuthSession(ByteBuffer& recv)
         return -1;
     }
 
-    // Register with the NodeLink so inbound node packets route back here, then
-    // tell the node to open a backend session for this client. The send is
-    // best-effort: if the node is down it fails gracefully (logged) and the
-    // gateway keeps serving the already-authed client.
-    sNodeLink->RegisterClient(m_ClientId, this);
+    // Register with the registry so inbound node packets (from any link) route
+    // back here, then tell the pre-world node to open a backend session for this
+    // client. The send is best-effort: if the node is down it fails gracefully
+    // (logged) and the gateway keeps serving the already-authed client.
+    //
+    // Phase 2 / Task 1: the pre-world node (lowest connected id) fronts the
+    // session through char-enum. Task 2 records m_CurrentNodeId per client and
+    // re-homes at CMSG_PLAYER_LOGIN; for now everything routes to PreWorldNode().
+    sNodeRegistry().RegisterClient(m_ClientId, this);
     m_SessionOpened = true;
 
     ByteBuffer openMsg;
@@ -590,7 +603,8 @@ int ClientSocket::HandleAuthSession(ByteBuffer& recv)
     openMsg << uint8(m_Locale);
     openMsg << m_AccountName;
 
-    if (!sNodeLink->SendFrame(GW_SESSION_OPEN, openMsg))
+    NodeLink* link = sNodeRegistry().PreWorldNode();
+    if (!link || !link->SendFrame(GW_SESSION_OPEN, openMsg))
     {
         sLog.outError("ClientSocket: GW_SESSION_OPEN for client %u (acct %u) not delivered (node link down)",
             m_ClientId, m_AccountId);

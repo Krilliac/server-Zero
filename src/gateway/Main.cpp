@@ -46,7 +46,7 @@
 #include "Util.h"
 
 #include "ClientSocketMgr.h"
-#include "NodeLink.h"
+#include "NodeRegistry.h"
 
 #include <ace/Get_Opt.h>
 #include <ace/INET_Addr.h>
@@ -194,30 +194,16 @@ extern int main(int argc, char** argv)
         return 1;
     }
 
-    ///- Start the backend node link (Phase 1: one fixed node). It will keep
-    ///  retrying the connect on its own thread; failure here is non-fatal (the
-    ///  node side does not exist yet) so we only log it and continue.
-    std::string nodeHost = sConfig.GetStringDefault("Node.1.Host", "127.0.0.1");
-    uint16 nodePort = (uint16)sConfig.GetIntDefault("Node.1.GatewayPort", 9100);
-    std::string gatewaySecret = sConfig.GetStringDefault("Gateway.Secret", "");
-
-    // Fail closed: a node is configured (host + port) but no shared secret was
-    // set. Refuse to connect rather than attempt an unauthenticated link (the
-    // node would reject it anyway, but we make the misconfiguration explicit).
-    if (!nodeHost.empty() && nodePort != 0 && gatewaySecret.empty())
-    {
-        sLog.outError("Node.1 configured but Gateway.Secret is empty — refusing to connect the node link; set a shared secret on both the gateway and the node");
-    }
-    else if (sNodeLink->Start(nodeHost, nodePort, gatewaySecret) == -1)
-    {
-        sLog.outError("Failed to start node link to %s:%u (continuing without it)",
-            nodeHost.c_str(), nodePort);
-    }
+    ///- Build the backend node link pool from config (Phase 2: N nodes) and
+    ///  start every link. Each link keeps retrying its connect on its own
+    ///  thread; failure to connect is non-fatal (a node may not be up yet).
+    ///  Fail-closed on an empty Gateway.Secret is enforced inside StartAll().
+    sNodeRegistry().LoadFromConfig();
+    sNodeRegistry().StartAll();
 
     sLog.outString();
     sLog.outString("==============================================");
     sLog.outString(" Gateway online (GatewayPort %u)", gatewayPort);
-    sLog.outString(" Node link target %s:%u", nodeHost.c_str(), nodePort);
     sLog.outString("==============================================");
     sLog.outString();
 
@@ -237,7 +223,7 @@ extern int main(int argc, char** argv)
     }
 
     ///- Clean shutdown
-    sNodeLink->Stop();
+    sNodeRegistry().StopAll();
     sClientSocketMgr->StopNetwork();
     UnhookSignals();
     StopDB();

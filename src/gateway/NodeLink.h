@@ -24,21 +24,22 @@
 
 /**
  * @file NodeLink.h
- * @brief Gateway-side TCP link to a backend mangosd node (Phase 1: one node).
+ * @brief Gateway-side TCP link to a backend mangosd node.
  *
  * NodeLink owns ONE outbound TCP connection from the gateway to a node's
- * intake (host/port from config Node.1.Host / Node.1.GatewayPort). It mirrors
- * the connect + framing model of the game's ClusterThread (ClusterNetwork):
+ * intake. Phase 2 runs N of them (one per configured node), each carrying a
+ * node id; the NodeRegistry owns the instances. It mirrors the connect +
+ * framing model of the game's ClusterThread (ClusterNetwork):
  *   - a dedicated thread (ACE_Task_Base) owns the socket,
  *   - outbound frames use [uint32 len][uint8 type][payload] (GatewayFrame),
  *   - the same thread blocks on recv(), reassembles inbound frames and
- *     dispatches GW_CLIENT_PACKET to the owning ClientSocket by clientId.
+ *     dispatches GW_CLIENT_PACKET to the owning ClientSocket by clientId,
+ *     looked up via the registry's SHARED clientId -> socket map (a client's
+ *     inbound packets can come from whichever node currently fronts it).
  *
  * Sends may come from reactor threads, so SendFrame() is guarded by a mutex.
  * If the node is down, SendFrame() simply reports failure (gateway keeps
  * running) and the thread keeps retrying the connect with a fixed backoff.
- *
- * A single shared instance is held in NodeLink.cpp and reached via sNodeLink.
  */
 
 #ifndef GATEWAY_H_NODELINK
@@ -63,17 +64,21 @@ class ClientSocket;
 class NodeLink : public ACE_Task_Base
 {
     public:
-        NodeLink();
+        /// Build a link to one node. host/port/secret are fixed for the life of
+        /// the link; nodeId is the registry key used in routing/logging.
+        NodeLink(uint32 nodeId, const std::string& host, uint16 port, const std::string& secret);
         virtual ~NodeLink();
 
-        /// Configure (host/port/secret) and start the link thread. The thread
-        /// keeps (re)connecting until Stop() is called. The secret is sent as the
-        /// GW_HELLO first frame on every (re)connect to authenticate the link.
-        /// Returns 0 on success.
-        int Start(const std::string& host, uint16 port, const std::string& secret);
+        /// Start the link thread. The thread keeps (re)connecting until Stop()
+        /// is called; the secret is sent as the GW_HELLO first frame on every
+        /// (re)connect to authenticate the link. Returns 0 on success.
+        int Start();
 
         /// Request the link thread to exit and join it.
         void Stop();
+
+        /// Registry key / wire id for this node.
+        uint32 NodeId() const { return m_NodeId; }
 
         /// True while the outbound socket is connected to the node.
         bool IsConnected() const { return m_connected; }
@@ -82,11 +87,6 @@ class NodeLink : public ACE_Task_Base
         /// Thread-safe. Returns true on a full send, false if not connected
         /// or the send failed (caller treats failure as best-effort).
         bool SendFrame(uint8 type, ByteBuffer const& payload);
-
-        /// Register / unregister a client by its gateway-assigned id so that
-        /// inbound node packets can be routed back to the right ClientSocket.
-        void RegisterClient(uint32 clientId, ClientSocket* sock);
-        void UnregisterClient(uint32 clientId);
 
         /// ACE_Task_Base entry point (the link thread body).
         virtual int svc() override;
@@ -99,6 +99,7 @@ class NodeLink : public ACE_Task_Base
         void parseFrames();            // consume complete frames from m_recvBuf
         void dispatch(uint8 type, const uint8* payload, uint32 len);
 
+        uint32        m_NodeId;        // registry key / wire id for this node
         std::string   m_host;
         uint16        m_port;
         std::string   m_secret;        // pre-shared link secret sent in GW_HELLO
@@ -109,14 +110,6 @@ class NodeLink : public ACE_Task_Base
         mutable ACE_Thread_Mutex m_sendMutex; // guards m_stream sends
 
         std::vector<uint8> m_recvBuf;   // inbound reassembly (link thread only)
-
-        // clientId -> ClientSocket*, guarded by m_clientsMutex.
-        std::map<uint32, ClientSocket*> m_clients;
-        ACE_Thread_Mutex m_clientsMutex;
 };
-
-/// Process-wide single NodeLink instance (Phase 1: one fixed node).
-NodeLink* GetNodeLink();
-#define sNodeLink (GetNodeLink())
 
 #endif /* GATEWAY_H_NODELINK */

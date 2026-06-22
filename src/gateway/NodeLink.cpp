@@ -38,13 +38,15 @@
 #include <ace/OS_NS_unistd.h>
 
 #include "NodeLink.h"
+#include "NodeRegistry.h"
 #include "ClientSocket.h"
 #include "Cluster/GatewayProtocol.h"
 
 #include "Log.h"
 
-NodeLink::NodeLink()
-    : m_host(), m_port(0), m_secret(), m_running(false), m_connected(false)
+NodeLink::NodeLink(uint32 nodeId, const std::string& host, uint16 port, const std::string& secret)
+    : m_NodeId(nodeId), m_host(host), m_port(port), m_secret(secret),
+      m_running(false), m_connected(false)
 {
 }
 
@@ -53,16 +55,13 @@ NodeLink::~NodeLink()
     Stop();
 }
 
-int NodeLink::Start(const std::string& host, uint16 port, const std::string& secret)
+int NodeLink::Start()
 {
-    m_host    = host;
-    m_port    = port;
-    m_secret  = secret;
     m_running = true;
 
     if (activate(THR_NEW_LWP | THR_JOINABLE, 1) == -1)
     {
-        sLog.outError("NodeLink: failed to spawn link thread");
+        sLog.outError("NodeLink: failed to spawn link thread for node %u", m_NodeId);
         m_running = false;
         return -1;
     }
@@ -79,18 +78,6 @@ void NodeLink::Stop()
     m_running = false;
     dropConnection(); // unblock a pending recv()
     wait();           // join the link thread
-}
-
-void NodeLink::RegisterClient(uint32 clientId, ClientSocket* sock)
-{
-    ACE_GUARD(ACE_Thread_Mutex, guard, m_clientsMutex);
-    m_clients[clientId] = sock;
-}
-
-void NodeLink::UnregisterClient(uint32 clientId)
-{
-    ACE_GUARD(ACE_Thread_Mutex, guard, m_clientsMutex);
-    m_clients.erase(clientId);
 }
 
 bool NodeLink::SendFrame(uint8 type, ByteBuffer const& payload)
@@ -121,7 +108,7 @@ bool NodeLink::SendFrame(uint8 type, ByteBuffer const& payload)
 
 bool NodeLink::connectToNode()
 {
-    sLog.outString("NodeLink: connecting to %s:%u", m_host.c_str(), m_port);
+    sLog.outString("NodeLink: node %u connecting to %s:%u", m_NodeId, m_host.c_str(), m_port);
 
     ACE_INET_Addr addr((u_short)m_port, m_host.c_str());
     ACE_SOCK_Connector connector;
@@ -129,14 +116,14 @@ bool NodeLink::connectToNode()
 
     if (connector.connect(m_stream, addr, &timeout) == -1)
     {
-        sLog.outError("NodeLink: connection to node %s:%u failed (%s); will retry",
-                      m_host.c_str(), m_port, ACE_OS::strerror(errno));
+        sLog.outError("NodeLink: node %u connection to %s:%u failed (%s); will retry",
+                      m_NodeId, m_host.c_str(), m_port, ACE_OS::strerror(errno));
         return false;
     }
 
     m_connected = true;
     m_recvBuf.clear();
-    sLog.outString("NodeLink: connected to node %s:%u", m_host.c_str(), m_port);
+    sLog.outString("NodeLink: node %u connected to %s:%u", m_NodeId, m_host.c_str(), m_port);
     return true;
 }
 
@@ -151,10 +138,10 @@ bool NodeLink::sendHello()
 
     if (!SendFrame((uint8)GW_HELLO, payload))
     {
-        sLog.outError("NodeLink: failed to send GW_HELLO to node %s:%u", m_host.c_str(), m_port);
+        sLog.outError("NodeLink: node %u failed to send GW_HELLO to %s:%u", m_NodeId, m_host.c_str(), m_port);
         return false;
     }
-    sLog.outString("NodeLink: sent GW_HELLO (link authentication) to node %s:%u", m_host.c_str(), m_port);
+    sLog.outString("NodeLink: node %u sent GW_HELLO (link authentication) to %s:%u", m_NodeId, m_host.c_str(), m_port);
     return true;
 }
 
@@ -246,17 +233,11 @@ void NodeLink::dispatch(uint8 type, const uint8* payload, uint32 len)
         body.append(payload + 6, bodyLen);
     }
 
-    // Route to the owning client. Note: ClientSocket is reference-counted and
-    // owned by the reactor; we only deliver through it while it is registered.
-    ClientSocket* sock = NULL;
-    {
-        ACE_GUARD(ACE_Thread_Mutex, guard, m_clientsMutex);
-        std::map<uint32, ClientSocket*>::iterator it = m_clients.find(clientId);
-        if (it != m_clients.end())
-        {
-            sock = it->second;
-        }
-    }
+    // Route to the owning client via the registry's SHARED client map (a
+    // client's inbound packets can arrive from whichever node fronts it). Note:
+    // ClientSocket is reference-counted and owned by the reactor; we only
+    // deliver through it while it is registered.
+    ClientSocket* sock = sNodeRegistry().FindClient(clientId);
 
     if (!sock)
     {
@@ -269,7 +250,7 @@ void NodeLink::dispatch(uint8 type, const uint8* payload, uint32 len)
 
 int NodeLink::svc()
 {
-    sLog.outString("NodeLink: link thread started (target %s:%u)", m_host.c_str(), m_port);
+    sLog.outString("NodeLink: node %u link thread started (target %s:%u)", m_NodeId, m_host.c_str(), m_port);
 
     while (m_running)
     {
@@ -296,21 +277,12 @@ int NodeLink::svc()
 
         if (m_running)
         {
-            sLog.outString("NodeLink: connection to node %s:%u lost; reconnecting",
-                           m_host.c_str(), m_port);
+            sLog.outString("NodeLink: node %u connection to %s:%u lost; reconnecting",
+                           m_NodeId, m_host.c_str(), m_port);
         }
     }
 
     dropConnection();
-    sLog.outString("NodeLink: link thread stopped");
+    sLog.outString("NodeLink: link thread for node %u stopped", m_NodeId);
     return 0;
-}
-
-// ---------------------------------------------------------------------------
-// Process-wide single instance (Phase 1: one fixed node).
-// ---------------------------------------------------------------------------
-NodeLink* GetNodeLink()
-{
-    static NodeLink instance;
-    return &instance;
 }
