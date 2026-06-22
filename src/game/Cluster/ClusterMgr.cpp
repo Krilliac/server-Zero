@@ -844,9 +844,14 @@ void ClusterMgr::RemoveBgQueueEntry(uint32 guidLow)
 {
     if (!IsCrossNodeBG() || !guidLow)
         return;
+    // Delete this player's shared row when WE own it — either because the player is
+    // currently on this node (node_id), or because this node was chosen as the match
+    // host (host_node) and has now consumed the row via host-side auto-join. The PK is
+    // player_guid, so this affects at most one row regardless of which clause matches.
     LoginDatabase.PExecute(
-        "DELETE FROM `cluster_bg_queue` WHERE `player_guid`=%u AND `node_id`=%u",
-        guidLow, m_nodeId);
+        "DELETE FROM `cluster_bg_queue` WHERE `player_guid`=%u "
+        "AND (`node_id`=%u OR `host_node`=%u)",
+        guidLow, m_nodeId, m_nodeId);
 }
 
 void ClusterMgr::ClearOwnBgQueueEntries()
@@ -860,11 +865,31 @@ void ClusterMgr::ClearOwnBgQueueEntries()
 
 void ClusterMgr::RunBgMatchmaker()
 {
-    // Coordinator-only. For each (bg_type_id,bracket_id) with 'queued' rows, count per
-    // team; when BOTH teams meet the template min-per-team, pick a host and flip enough
-    // rows to 'matched'. Idempotent — already-matched rows are ignored.
+    // Coordinator-only. GROUP-ATOMIC matchmaker: builds matches from whole queue units
+    // (a solo = 1 unit; a queued group = all its rows, kept together), fills each side
+    // up to the template max-per-team, and forms MULTIPLE matches per bucket per tick
+    // while both sides still meet min. A group is never split across the min/max
+    // boundary. Idempotent: only 'queued' rows are consumed; matched rows are left for
+    // convergence.
     if (!IsCrossNodeBG())
         return;
+
+    // Stale-row sweep: drop rows owned by an offline/unknown node before matching, so a
+    // downed node's queued players never get matched into a phantom team. Reuses the
+    // failover survivor-list NOT IN pattern. Coordinator-only (we are).
+    {
+        std::vector<uint32> survivors;
+        GetOnlineSurvivors(survivors);
+        if (!survivors.empty())
+        {
+            std::string inList;
+            for (size_t i = 0; i < survivors.size(); ++i)
+                inList += (i ? "," : "") + std::to_string(survivors[i]);
+            LoginDatabase.PExecute(
+                "DELETE FROM `cluster_bg_queue` WHERE `node_id`<>0 AND `node_id` NOT IN (%s)",
+                inList.c_str());
+        }
+    }
 
     QueryResult* groups = LoginDatabase.Query(
         "SELECT `bg_type_id`,`bracket_id` FROM `cluster_bg_queue` "
@@ -889,45 +914,100 @@ void ClusterMgr::RunBgMatchmaker()
         if (!tmpl)
             continue;
         uint32 minPerTeam = tmpl->GetMinPlayersPerTeam();
+        uint32 maxPerTeam = tmpl->GetMaxPlayersPerTeam();
         if (!minPerTeam)
             continue;
+        if (!maxPerTeam || maxPerTeam < minPerTeam)
+            maxPerTeam = minPerTeam; // defensive: never below min
 
-        uint32 teamCount[2] = { 0, 0 }; // [0]=ALLIANCE, [1]=HORDE
-        QueryResult* cnt = LoginDatabase.PQuery(
-            "SELECT `team`,COUNT(*) FROM `cluster_bg_queue` "
+        // A queue unit = one solo player or one whole group. Members carry the
+        // player_guids so we can flip exactly the chosen rows to 'matched'.
+        struct QUnit { uint32 groupId; std::vector<uint32> guids; };
+        std::vector<QUnit> teamUnits[2]; // [0]=ALLIANCE [1]=HORDE, FIFO by enqueue time
+
+        QueryResult* rows = LoginDatabase.PQuery(
+            "SELECT `player_guid`,`team`,`as_group`,`group_id` FROM `cluster_bg_queue` "
             "WHERE `status`='queued' AND `bg_type_id`=%u AND `bracket_id`=%u "
-            "GROUP BY `team`", bgTypeId, bracketId);
-        if (cnt)
+            "ORDER BY `enqueued_at` ASC,`player_guid` ASC", bgTypeId, bracketId);
+        if (!rows)
+            continue;
+
+        std::map<uint32, size_t> grpIndex[2]; // group_id -> index into teamUnits[ti]
+        do
         {
-            do
+            Field* rf = rows->Fetch();
+            uint32 guid    = rf[0].GetUInt32();
+            uint32 team    = rf[1].GetUInt32();
+            uint32 asGroup = rf[2].GetUInt32();
+            uint32 grpId   = rf[3].GetUInt32();
+            int ti = (team == HORDE) ? 1 : 0; // anything not HORDE buckets as ALLIANCE
+
+            if (asGroup && grpId)
             {
-                uint32 team = (*cnt)[0].GetUInt32();
-                uint32 n    = (*cnt)[1].GetUInt32();
-                if (team == ALLIANCE) teamCount[0] = n;
-                else if (team == HORDE) teamCount[1] = n;
-            } while (cnt->NextRow());
-            delete cnt;
-        }
+                std::map<uint32, size_t>::iterator it = grpIndex[ti].find(grpId);
+                if (it == grpIndex[ti].end())
+                {
+                    QUnit u; u.groupId = grpId; u.guids.push_back(guid);
+                    grpIndex[ti][grpId] = teamUnits[ti].size();
+                    teamUnits[ti].push_back(u);
+                }
+                else
+                    teamUnits[ti][it->second].guids.push_back(guid);
+            }
+            else
+            {
+                QUnit u; u.groupId = 0; u.guids.push_back(guid);
+                teamUnits[ti].push_back(u);
+            }
+        } while (rows->NextRow());
+        delete rows;
 
-        if (teamCount[0] < minPerTeam || teamCount[1] < minPerTeam)
-            continue;
-
-        uint32 host = GetOptimalNode();
-        if (!host)
-            continue;
-
-        for (uint32 t = 0; t < 2; ++t)
+        // Walk both teams' unit lists, forming as many matches as the queued population
+        // allows this tick. Each match is packed greedily up to maxPerTeam without ever
+        // splitting a unit, then committed only if BOTH sides reached minPerTeam.
+        size_t cursor[2] = { 0, 0 };
+        for (;;)
         {
-            uint32 teamVal = (t == 0) ? ALLIANCE : HORDE;
-            LoginDatabase.PExecute(
-                "UPDATE `cluster_bg_queue` SET `status`='matched',`host_node`=%u "
-                "WHERE `status`='queued' AND `bg_type_id`=%u AND `bracket_id`=%u "
-                "AND `team`=%u ORDER BY `enqueued_at` ASC LIMIT %u",
-                host, bgTypeId, bracketId, teamVal, minPerTeam);
-        }
+            std::vector<uint32> picked[2];
+            uint32 count[2] = { 0, 0 };
 
-        sLog.outString("Cluster BG: matched bgType %u bracket %u (%u v %u min) -> host node %u.",
-                       bgTypeId, bracketId, minPerTeam, minPerTeam, host);
+            for (int ti = 0; ti < 2; ++ti)
+            {
+                while (cursor[ti] < teamUnits[ti].size())
+                {
+                    QUnit const& u = teamUnits[ti][cursor[ti]];
+                    uint32 sz = (uint32)u.guids.size();
+                    if (count[ti] + sz > maxPerTeam) // group-atomic: take whole or skip
+                        break;
+                    for (size_t g = 0; g < u.guids.size(); ++g)
+                        picked[ti].push_back(u.guids[g]);
+                    count[ti] += sz;
+                    ++cursor[ti];
+                    if (count[ti] >= maxPerTeam)
+                        break;
+                }
+            }
+
+            if (count[0] < minPerTeam || count[1] < minPerTeam)
+                break; // cannot form another full match from what remains
+
+            uint32 host = GetOptimalNode();
+            if (!host)
+                break;
+
+            // Flip exactly the chosen rows to 'matched' for this host, per-guid so
+            // partial group membership can never leak into a different match.
+            for (int ti = 0; ti < 2; ++ti)
+                for (size_t g = 0; g < picked[ti].size(); ++g)
+                    LoginDatabase.PExecute(
+                        "UPDATE `cluster_bg_queue` SET `status`='matched',`host_node`=%u "
+                        "WHERE `player_guid`=%u AND `status`='queued'",
+                        host, picked[ti][g]);
+
+            sLog.outString("Cluster BG: matched bgType %u bracket %u (%u v %u, min %u/max %u) "
+                           "-> host node %u.", bgTypeId, bracketId,
+                           count[0], count[1], minPerTeam, maxPerTeam, host);
+        }
     }
 }
 
@@ -998,6 +1078,77 @@ void ClusterMgr::DeliverGroupChatFallback(uint32 groupId, uint8 chatType, uint32
     if (delivered)
         sLog.outString("Cluster: relayed group %u chat delivered to %u local member(s) via "
                        "DB fallback (group object not loaded here).", groupId, delivered);
+}
+
+void ClusterMgr::HostSideBgAutoJoin(Player* plr)
+{
+    // Called from the login tail (player fully in world). When clustering+migration+
+    // cross-node BG are all on AND this node is the chosen host for a matched row of
+    // this player, enqueue them into the LOCAL BattleGroundQueue using the SAME path as
+    // a normal solo join, so the native BattleGroundQueue::Update forms the BG and
+    // invites them. Then delete the row. Inert in single-node (IsCrossNodeBG false) and
+    // for any player without a host-this matched row, so normal logins / joins are
+    // completely untouched.
+    if (!IsCrossNodeBG() || !plr || !plr->IsInWorld())
+        return;
+
+    // Don't double-enqueue: already in a BG or any BG queue -> leave the (consumed) row
+    // to logout/leave GC and do nothing here.
+    if (plr->InBattleGround() || plr->InBattleGroundQueue())
+        return;
+
+    uint32 guidLow = plr->GetGUIDLow();
+
+    // A matched row naming THIS node as host means "you converged here to start a BG".
+    QueryResult* res = LoginDatabase.PQuery(
+        "SELECT `bg_type_id`,`team` FROM `cluster_bg_queue` "
+        "WHERE `player_guid`=%u AND `status`='matched' AND `host_node`=%u LIMIT 1",
+        guidLow, m_nodeId);
+    if (!res)
+        return;
+
+    uint32 bgTypeIdRaw = (*res)[0].GetUInt32();
+    uint32 team        = (*res)[1].GetUInt32();
+    delete res;
+
+    BattleGroundTypeId bgTypeId = BattleGroundTypeId(bgTypeIdRaw);
+    BattleGround* bg = sBattleGroundMgr.GetBattleGroundTemplate(bgTypeId);
+
+    // If this node can't host this BG type, or the player fails the normal join gates
+    // (deserter / free slot), GC the row and bail cleanly (no partial enqueue).
+    if (!bg || !plr->CanJoinToBattleground() || !plr->HasFreeBattleGroundQueueId())
+    {
+        RemoveBgQueueEntry(guidLow);
+        return;
+    }
+
+    // Bracket is recomputed from the player's CURRENT level (a level-up in transit must
+    // not desync the local bucket); the stored bracket_id is advisory only.
+    BattleGroundBracketId bracketId = plr->GetBattleGroundBracketIdFromLevel(bgTypeId);
+    BattleGroundQueueTypeId bgQueueTypeId = BattleGroundMgr::BGQueueTypeId(bgTypeId);
+
+    // ---- exactly the local solo-join enqueue sequence (BattleGroundHandler.cpp) ----
+    BattleGroundQueue& bgQueue = sBattleGroundMgr.m_BattleGroundQueues[bgQueueTypeId];
+    GroupQueueInfo* ginfo = bgQueue.AddGroup(plr, NULL, bgTypeId, bracketId, false);
+    uint32 avgTime = bgQueue.GetAverageQueueWaitTime(ginfo, bracketId);
+    uint32 queueSlot = plr->AddBattleGroundQueueId(bgQueueTypeId);
+    plr->SetBattleGroundEntryPoint();
+
+    if (plr->GetSession())
+    {
+        WorldPacket data;
+        sBattleGroundMgr.BuildBattleGroundStatusPacket(&data, bg, queueSlot, STATUS_WAIT_QUEUE, avgTime, 0);
+        plr->GetSession()->SendPacket(&data);
+    }
+
+    // Kick the queue so BattleGroundQueue::Update forms/invites just like a local join.
+    sBattleGroundMgr.ScheduleQueueUpdate(bgQueueTypeId, bgTypeId, bracketId);
+
+    // The cross-node row has done its job (player is now in the LOCAL queue here).
+    RemoveBgQueueEntry(guidLow);
+
+    sLog.outString("Cluster BG: host node %u auto-joined converged player %u (team %u) "
+                   "into local bgType %u queue.", m_nodeId, guidLow, team, bgTypeIdRaw);
 }
 
 void ClusterMgr::Update(uint32 /*diff*/)

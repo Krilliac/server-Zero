@@ -1035,6 +1035,11 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
 
     m_playerLoading = false;
 
+    // Cluster Phase 7b: if this player converged here as a matched cross-node BG entry,
+    // auto-join them into the local BG queue now that they're fully in world. No-op in
+    // single-node and for players without a host-this matched row (normal logins intact).
+    sClusterMgr->HostSideBgAutoJoin(pCurrChar);
+
     // Used by Eluna
 #ifdef ENABLE_ELUNA
     if (Eluna* e = sWorld.GetEluna())

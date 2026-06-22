@@ -689,6 +689,11 @@ void WorldSession::LogoutPlayer(bool Save)
             }
         }
 
+        // Cluster Phase 7b: drop this player's shared cross-node BG-queue row on logout
+        // so the coordinator never matches a player who is no longer online. No-op
+        // unless Cluster.CrossNodeBG is on (single-node logout byte-for-byte unchanged).
+        sClusterMgr->RemoveBgQueueEntry(_player->GetGUIDLow());
+
         ///- Reset the online field in the account table
         // no point resetting online in character table here as Player::SaveToDB() will set it to 1 since player has not been removed from world at this stage
         // No SQL injection as AccountID is uint32

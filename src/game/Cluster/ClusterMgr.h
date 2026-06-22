@@ -92,8 +92,12 @@ class ClusterMgr
         void   PublishBgQueueJoin(uint32 guidLow, std::string const& name, uint32 team,
                                   uint32 bgTypeId, uint32 bracketId, bool asGroup,
                                   uint32 groupId, uint32 level);
-        void   RemoveBgQueueEntry(uint32 guidLow);   // delete this player's row (leave/port-in)
+        void   RemoveBgQueueEntry(uint32 guidLow);   // delete this player's row (leave/port-in/logout)
         void   ClearOwnBgQueueEntries();             // delete every row this node owns (shutdown)
+        // Phase 7b host-side auto-join, called from the login tail once the player is
+        // fully in world. If this node is the matched host for the player, enqueue them
+        // into the local BG queue (reusing the normal solo-join path) and clear the row.
+        void   HostSideBgAutoJoin(Player* plr);
         // Phase 4: hand a serialized player blob to a specific target node (directed).
         void   SendPlayerTransfer(uint32 targetNode, uint32 guidLow, ByteBuffer const& blob);
 
