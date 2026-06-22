@@ -719,6 +719,22 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
     /* Validation check completely, assign player to WorldSession::_player for later use */
     SetPlayer(pCurrChar);
 
+    // Cluster gateway (Phase 3): is this login a transparent migration arrival
+    // (player handed off from another node via the gateway) rather than a fresh
+    // first login? If so we still load + add to world and send SMSG_LOGIN_VERIFY_WORLD
+    // (which drives the client's loading-screen / world-enter on the SAME, never-reset
+    // connection), but we suppress the first-login-only side effects that are wrong for
+    // a resume: the intro cinematic, the login MOTD / guild-MOTD broadcast spam, and the
+    // AT_LOGIN_FIRST one-shot hooks. The flag is consumed (cleared) exactly here.
+    const bool migrationArriving = IsGatewayMigrationArriving();
+    if (migrationArriving)
+    {
+        SetGatewayMigrationArriving(false);
+        DEBUG_LOG("Cluster gateway: player guid %u logging in as a migration arrival; "
+                  "suppressing first-login side effects, resuming via SMSG_LOGIN_VERIFY_WORLD.",
+                  pCurrChar->GetGUIDLow());
+    }
+
     WorldPacket data(SMSG_LOGIN_VERIFY_WORLD, 20);
     data << pCurrChar->GetMapId();
     data << pCurrChar->GetPositionX();
@@ -737,7 +753,9 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
     /* 1.12.1 does not have SMSG_MOTD, so we send a server message */
     /* Used for counting number of newlines in MOTD */
 
-    // Send MOTD
+    // Send MOTD (suppressed for a migration arrival — the player already saw it on
+    // the source node; re-spamming it on a transparent handoff would be a visible glitch)
+    if (!migrationArriving)
     {
         uint32 linecount = 0;
         /* The MOTD itself */
@@ -795,16 +813,22 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
         /* More checks to see if they're in a guild? I'm sure this is redundant */
         if (guild)
         {
-            /* Build MOTD packet and send it to the player */
-            data.Initialize(SMSG_GUILD_EVENT, (1 + 1 + guild->GetMOTD().size() + 1));
-            data << uint8(GE_MOTD);
-            data << uint8(1);
-            data << guild->GetMOTD();
-            SendPacket(&data);
-            DEBUG_LOG("WORLD: Sent guild-motd (SMSG_GUILD_EVENT)");
+            // For a migration arrival, skip the guild MOTD re-send and the GE_SIGNED_ON
+            // broadcast: the player never actually logged out, so guildmates must not see
+            // a spurious sign-on and the player must not re-see the guild MOTD.
+            if (!migrationArriving)
+            {
+                /* Build MOTD packet and send it to the player */
+                data.Initialize(SMSG_GUILD_EVENT, (1 + 1 + guild->GetMOTD().size() + 1));
+                data << uint8(GE_MOTD);
+                data << uint8(1);
+                data << guild->GetMOTD();
+                SendPacket(&data);
+                DEBUG_LOG("WORLD: Sent guild-motd (SMSG_GUILD_EVENT)");
 
-            /* Let everyone in the guild know you've just signed in */
-            guild->BroadcastEvent(GE_SIGNED_ON, pCurrChar->GetObjectGuid(), pCurrChar->GetName());
+                /* Let everyone in the guild know you've just signed in */
+                guild->BroadcastEvent(GE_SIGNED_ON, pCurrChar->GetObjectGuid(), pCurrChar->GetName());
+            }
         }
         /* If the player is not in a guild */
         else
@@ -829,8 +853,12 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
      * TODO: See if we can send information about game objects here (prevent alt+f4 through object) */
     pCurrChar->SendInitialPacketsBeforeAddToMap();
 
-    /* If it's the player's first login, send a cinematic */
-    bool isFirstLogin = !pCurrChar->getCinematic();
+    /* If it's the player's first login, send a cinematic.
+     * Never for a migration arrival: the intro cinematic is a brand-new-character
+     * experience and would be jarring on a transparent node handoff. (For an actual
+     * brand-new char that happens to migrate, getCinematic() would already be set by
+     * the source node's login, so this is normally moot — but we gate explicitly.) */
+    bool isFirstLogin = !pCurrChar->getCinematic() && !migrationArriving;
     if (isFirstLogin)
     {
         pCurrChar->setCinematic(1);
@@ -980,9 +1008,11 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
 
     // Used by Eluna
 #ifdef ENABLE_ELUNA
+    // OnFirstLogin is a brand-new-character hook; a migration arrival is never a first
+    // login (the flag would normally already be cleared on the originating node anyway).
     if (Eluna* e = pCurrChar->GetEluna())
     {
-        if (pCurrChar->HasAtLoginFlag(AT_LOGIN_FIRST))
+        if (!migrationArriving && pCurrChar->HasAtLoginFlag(AT_LOGIN_FIRST))
         {
             e->OnFirstLogin(pCurrChar);
         }
