@@ -45,6 +45,8 @@
 #include "ClientSocket.h"
 #include "ClientSocketMgr.h"
 #include "GatewayAuth.h"
+#include "NodeLink.h"
+#include "Cluster/GatewayProtocol.h"
 
 #include "Common.h"
 #include "Log.h"
@@ -100,8 +102,13 @@ struct ClientPktHeader
 #pragma pack(pop)
 #endif
 
+/// Process-wide source of unique client ids (starts at 1; 0 means "unset").
+std::atomic<uint32> ClientSocket::s_ClientIdCounter(0);
+
 ClientSocket::ClientSocket(void)
     : ClientHandler(),
+    m_ClientId(++s_ClientIdCounter),
+    m_SessionOpened(false),
     m_Address(),
     m_Crypt(),
     m_Seed(rand32()),
@@ -302,6 +309,18 @@ int ClientSocket::handle_output(ACE_HANDLE)
  */
 int ClientSocket::handle_close(ACE_HANDLE h, ACE_Reactor_Mask)
 {
+    // Tear down the backend session and stop routing inbound node packets here.
+    if (m_SessionOpened)
+    {
+        m_SessionOpened = false;
+
+        ByteBuffer releaseMsg;
+        releaseMsg << uint32(m_ClientId);
+        sNodeLink->SendFrame(GW_SESSION_RELEASE, releaseMsg); // best-effort
+
+        sNodeLink->UnregisterClient(m_ClientId);
+    }
+
     {
         ACE_GUARD_RETURN(LockType, Guard, m_OutBufferLock, -1);
 
@@ -315,6 +334,26 @@ int ClientSocket::handle_close(ACE_HANDLE h, ACE_Reactor_Mask)
 
     reactor()->remove_handler(this, ACE_Event_Handler::DONT_CALL | ACE_Event_Handler::ALL_EVENTS_MASK);
     return 0;
+}
+
+/**
+ * @brief Deliver a server packet received from the backend node to the client.
+ *
+ * Builds the (encrypted, once keyed) server header and writes the body via the
+ * existing SendPacket path. Invoked from the NodeLink thread; SendPacket takes
+ * m_OutBufferLock so this is safe against the reactor threads.
+ *
+ * @param opcode  Server opcode supplied by the node.
+ * @param payload Packet body supplied by the node.
+ * @return int Zero on success; -1 on failure.
+ */
+int ClientSocket::DeliverServerPacket(uint16 opcode, const ByteBuffer& payload)
+{
+    if (closing_)
+    {
+        return -1;
+    }
+    return SendPacket(opcode, payload);
 }
 
 /**
@@ -413,10 +452,23 @@ int ClientSocket::handle_input_payload(void)
     else
     {
         // Post-auth: subsequent packets arrive with their headers decrypted
-        // (handle_input_header runs DecryptRecv now that m_Crypt is keyed).
-        // Routing of game opcodes to world nodes lands in a later task.
-        sLog.outString("ClientSocket: recv from %s (authed acct %u) opcode 0x%04X (%u bytes payload)",
-            m_Address.c_str(), m_AccountId, opcode, (uint32)payloadLen);
+        // (handle_input_header runs DecryptRecv now that m_Crypt is keyed). The
+        // decrypted plaintext packet is tunnelled to the backend node as a
+        // GW_CLIENT_PACKET (clientId, opcode, raw payload). If the node link is
+        // down the forward fails best-effort; we just log it and keep going.
+        ByteBuffer fwd;
+        fwd << uint32(m_ClientId);
+        fwd << uint16(opcode);
+        if (payloadLen)
+        {
+            fwd.append(recv.contents(), payloadLen);
+        }
+
+        if (!sNodeLink->SendFrame(GW_CLIENT_PACKET, fwd))
+        {
+            DEBUG_LOG("ClientSocket: drop opcode 0x%04X from client %u (acct %u): node link down",
+                opcode, m_ClientId, m_AccountId);
+        }
     }
 
     return rc;
@@ -522,6 +574,26 @@ int ClientSocket::HandleAuthSession(ByteBuffer& recv)
         sLog.outError("ClientSocket::HandleAuthSession: failed to send SMSG_AUTH_RESPONSE to %s",
             m_Address.c_str());
         return -1;
+    }
+
+    // Register with the NodeLink so inbound node packets route back here, then
+    // tell the node to open a backend session for this client. The send is
+    // best-effort: if the node is down it fails gracefully (logged) and the
+    // gateway keeps serving the already-authed client.
+    sNodeLink->RegisterClient(m_ClientId, this);
+    m_SessionOpened = true;
+
+    ByteBuffer openMsg;
+    openMsg << uint32(m_ClientId);
+    openMsg << uint32(m_AccountId);
+    openMsg << uint32(m_Security);
+    openMsg << uint8(m_Locale);
+    openMsg << m_AccountName;
+
+    if (!sNodeLink->SendFrame(GW_SESSION_OPEN, openMsg))
+    {
+        sLog.outError("ClientSocket: GW_SESSION_OPEN for client %u (acct %u) not delivered (node link down)",
+            m_ClientId, m_AccountId);
     }
 
     return 0;

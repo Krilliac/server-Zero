@@ -47,6 +47,13 @@ set(SRC_GRP_COMMON
 )
 source_group("Common" FILES ${SRC_GRP_COMMON})
 
+# Shared cluster/gateway wire protocol headers (header-only; usable by both
+# the game server node intake and the standalone gateway daemon).
+set(SRC_GRP_CLUSTER
+  Cluster/GatewayProtocol.h
+)
+source_group("Cluster" FILES ${SRC_GRP_CLUSTER})
+
 set(SRC_GRP_CONFIG
   Config/Config.cpp
   Config/Config.h
@@ -177,6 +184,7 @@ source_group("Utilities" FILES ${SRC_GRP_UTILITIES})
 
 set(TGT_INCL
   Auth
+  Cluster
   Common
   Config
   DataStores
@@ -201,6 +209,7 @@ TEST_BIG_ENDIAN(ENDIAN_VALUE)
 
 add_library(shared STATIC
     ${SRC_GRP_AUTH}
+    ${SRC_GRP_CLUSTER}
     ${SRC_GRP_COMMON}
     ${SRC_GRP_CONFIG}
     ${SRC_GRP_DATASTORE}

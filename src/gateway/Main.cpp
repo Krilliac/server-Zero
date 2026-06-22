@@ -46,6 +46,7 @@
 #include "Util.h"
 
 #include "ClientSocketMgr.h"
+#include "NodeLink.h"
 
 #include <ace/Get_Opt.h>
 #include <ace/INET_Addr.h>
@@ -193,9 +194,21 @@ extern int main(int argc, char** argv)
         return 1;
     }
 
+    ///- Start the backend node link (Phase 1: one fixed node). It will keep
+    ///  retrying the connect on its own thread; failure here is non-fatal (the
+    ///  node side does not exist yet) so we only log it and continue.
+    std::string nodeHost = sConfig.GetStringDefault("Node.1.Host", "127.0.0.1");
+    uint16 nodePort = (uint16)sConfig.GetIntDefault("Node.1.GatewayPort", 9100);
+    if (sNodeLink->Start(nodeHost, nodePort) == -1)
+    {
+        sLog.outError("Failed to start node link to %s:%u (continuing without it)",
+            nodeHost.c_str(), nodePort);
+    }
+
     sLog.outString();
     sLog.outString("==============================================");
     sLog.outString(" Gateway online (GatewayPort %u)", gatewayPort);
+    sLog.outString(" Node link target %s:%u", nodeHost.c_str(), nodePort);
     sLog.outString("==============================================");
     sLog.outString();
 
@@ -215,6 +228,7 @@ extern int main(int argc, char** argv)
     }
 
     ///- Clean shutdown
+    sNodeLink->Stop();
     sClientSocketMgr->StopNetwork();
     UnhookSignals();
     StopDB();

@@ -55,6 +55,7 @@
 #include "Auth/AuthCrypt.h"
 #include "ByteBuffer.h"
 
+#include <atomic>
 #include <string>
 
 class ClientSocket;
@@ -89,6 +90,16 @@ class ClientSocket : protected ClientHandler
         /// EncryptSend hook below will scramble it.
         /// @return 0 on success, -1 on failure
         int SendPacket(uint16 opcode, const ByteBuffer& payload);
+
+        /// Deliver a server packet that arrived from the backend node over the
+        /// NodeLink. Builds the (encrypted) server header and writes it to the
+        /// client. Called from the NodeLink thread; safe via SendPacket's lock.
+        /// @return 0 on success, -1 on failure
+        int DeliverServerPacket(uint16 opcode, const ByteBuffer& payload);
+
+        /// Gateway-assigned, process-unique id used to key this connection in
+        /// the NodeLink's clientId -> ClientSocket map.
+        uint32 GetClientId() const { return m_ClientId; }
 
     protected:
         /// Things called by the ACE framework.
@@ -127,6 +138,15 @@ class ClientSocket : protected ClientHandler
         int iSendPacket(uint16 opcode, const ByteBuffer& payload);
 
     private:
+        /// Process-wide monotonic source for m_ClientId.
+        static std::atomic<uint32> s_ClientIdCounter;
+
+        /// Gateway-assigned unique id for this connection (NodeLink routing key).
+        uint32 m_ClientId;
+
+        /// True once GW_SESSION_OPEN has been registered/sent for this client.
+        bool m_SessionOpened;
+
         /// Address of the remote peer.
         std::string m_Address;
 
