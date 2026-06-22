@@ -471,6 +471,20 @@ class Group
         void BroadcastReadyCheck(WorldPacket* packet);
         void OfflineReadyCheck();
 
+        // Cluster (Phase 7): deliver a party/raid chat message relayed from another
+        // node to this group's LOCAL online members. The sender lives elsewhere
+        // (speak-right enforced at origin); this only re-broadcasts the built packet.
+        // chatType is a ChatMsg; subGroup scopes plain party chat in a raid (-1 = all).
+        // Primitive params keep this header free of Chat.h (the .cpp casts the enums).
+        void DeliverRelayedChat(uint32 chatType, uint32 lang, ObjectGuid fromGuid,
+                                uint32 chatTag, const std::string& fromName,
+                                const std::string& msg, int32 subGroup = -1);
+
+        // Cluster (Phase 7): a peer reported that this group's roster/leader/state
+        // changed in the shared DB. Refresh local members' group view. reason is a
+        // ClusterGroupStateReason. Minimal seam; extensible toward cross-node BG.
+        void OnRelayedStateChange(uint8 reason);
+
         void RewardGroupAtKill(Unit* pVictim, Player* player_tap);
 
         /*********************************************************/

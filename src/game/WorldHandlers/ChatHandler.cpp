@@ -445,9 +445,19 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
             }
 #endif
 
+            sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
+
             WorldPacket data;
             ChatHandler::BuildChatPacket(data, ChatMsg(type), msg.c_str(), Language(lang), _player->GetChatTag(), _player->GetObjectGuid(), _player->GetName());
-            group->BroadcastPacket(&data, false, group->GetMemberGroup(GetPlayer()->GetObjectGuid()));
+            uint8 partySubGroup = group->GetMemberGroup(GetPlayer()->GetObjectGuid());
+            group->BroadcastPacket(&data, false, partySubGroup);
+
+            // Cluster: relay party chat to this group's members on other nodes. Only
+            // persistent (non-BG) groups have a stable id; BG groups are per-node.
+            if (sClusterMgr->IsEnabled() && group->GetId() && !group->isBGGroup())
+                sClusterMgr->SendGroupChatRelay(CHAT_MSG_PARTY, lang, group->GetId(),
+                    _player->GetObjectGuid().GetRawValue(), uint8(_player->GetChatTag()),
+                    _player->GetName(), msg, int32(partySubGroup));
 
             break;
         }
@@ -635,9 +645,17 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
             }
 #endif
 
+            sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
+
             WorldPacket data;
             ChatHandler::BuildChatPacket(data, CHAT_MSG_RAID, msg.c_str(), Language(lang), _player->GetChatTag(), _player->GetObjectGuid(), _player->GetName());
             group->BroadcastPacket(&data, false);
+
+            // Cluster: relay raid chat to raid members on other nodes.
+            if (sClusterMgr->IsEnabled() && group->GetId() && !group->isBGGroup())
+                sClusterMgr->SendGroupChatRelay(CHAT_MSG_RAID, lang, group->GetId(),
+                    _player->GetObjectGuid().GetRawValue(), uint8(_player->GetChatTag()),
+                    _player->GetName(), msg, -1);
         } break;
         case CHAT_MSG_RAID_LEADER:
         {
@@ -699,9 +717,17 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
             }
 #endif
 
+            sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
+
             WorldPacket data;
             ChatHandler::BuildChatPacket(data, CHAT_MSG_RAID_LEADER, msg.c_str(), Language(lang), _player->GetChatTag(), _player->GetObjectGuid(), _player->GetName());
             group->BroadcastPacket(&data, false);
+
+            // Cluster: relay raid-leader chat to raid members on other nodes.
+            if (sClusterMgr->IsEnabled() && group->GetId() && !group->isBGGroup())
+                sClusterMgr->SendGroupChatRelay(CHAT_MSG_RAID_LEADER, lang, group->GetId(),
+                    _player->GetObjectGuid().GetRawValue(), uint8(_player->GetChatTag()),
+                    _player->GetName(), msg, -1);
         } break;
 
         case CHAT_MSG_RAID_WARNING:
@@ -754,6 +780,13 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
             // in battleground, raid warning is sent only to players in battleground - code is ok
             ChatHandler::BuildChatPacket(data, CHAT_MSG_RAID_WARNING, msg.c_str(), Language(lang), _player->GetChatTag(), _player->GetObjectGuid(), _player->GetName());
             group->BroadcastPacket(&data, false);
+
+            // Cluster: relay raid warning to raid members on other nodes. BG groups
+            // have id 0 and are skipped by the group->GetId() guard.
+            if (sClusterMgr->IsEnabled() && group->GetId() && !group->isBGGroup())
+                sClusterMgr->SendGroupChatRelay(CHAT_MSG_RAID_WARNING, lang, group->GetId(),
+                    _player->GetObjectGuid().GetRawValue(), uint8(_player->GetChatTag()),
+                    _player->GetName(), msg, -1);
         } break;
 
         case CHAT_MSG_BATTLEGROUND:

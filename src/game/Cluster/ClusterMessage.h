@@ -18,8 +18,19 @@ enum ClusterMessageType
     CLUSTER_MSG_PLAYER_LEAVE   = 3, // a player left the sending node
     CLUSTER_MSG_RELAY_MOVEMENT = 4, // relayed movement packet (guid+opcode+MovementInfo)
     CLUSTER_MSG_RELAY_CHAT     = 5, // relayed chat: whisper/guild/officer/channel (Phase 6)
-    CLUSTER_MSG_SOCIAL_STATUS  = 6, // friend/guild online status (Phase 6)
+    CLUSTER_MSG_SOCIAL_STATUS  = 6, // friend/guild online status (Phase 6, reserved)
     CLUSTER_MSG_PLAYER_TRANSFER= 7, // migration hand-off: uint32 guid + serialized player blob (Phase 4)
+    CLUSTER_MSG_RELAY_GROUP_CHAT = 8, // relayed party/raid chat (Phase 7): groupId-keyed
+    CLUSTER_MSG_GROUP_STATE      = 9, // group roster/leader/state changed; peers re-read DB (Phase 7)
+};
+
+// Reasons carried by CLUSTER_MSG_GROUP_STATE. Kept here so the BG layer can add its
+// own reasons (BG_QUEUE/BG_INVITE) on top of the same wire type later.
+enum ClusterGroupStateReason
+{
+    CLUSTER_GROUP_STATE_ROSTER  = 0, // membership add/remove
+    CLUSTER_GROUP_STATE_LEADER  = 1, // leader changed
+    CLUSTER_GROUP_STATE_DISBAND = 2, // group disbanded
 };
 
 namespace ClusterFrame

@@ -17,6 +17,8 @@
 #include "Guild.h"
 #include "ChannelMgr.h"
 #include "Channel.h"
+#include "ObjectMgr.h"
+#include "Group.h"
 #include "Config/Config.h"
 #include "Database/DatabaseEnv.h"
 
@@ -335,6 +337,42 @@ void ClusterMgr::SendChatRelay(uint8 chatType, uint32 lang, uint64 fromGuid, uin
     EnqueueBroadcast(frame); // peers hosting the recipients deliver it
 }
 
+void ClusterMgr::SendGroupChatRelay(uint8 chatType, uint32 lang, uint32 groupId,
+                                    uint64 fromGuid, uint8 fromTag, std::string const& fromName,
+                                    std::string const& text, int32 subGroup)
+{
+    if (!m_enabled || !groupId)
+        return;
+
+    ByteBuffer payload;
+    payload << uint8(chatType);
+    payload << uint32(lang);
+    payload << uint32(groupId);
+    payload << uint64(fromGuid);
+    payload << uint8(fromTag);
+    payload << fromName;
+    payload << text;
+    payload << int32(subGroup);
+
+    ByteBuffer frame;
+    ClusterFrame::Build(frame, CLUSTER_MSG_RELAY_GROUP_CHAT, payload);
+    EnqueueBroadcast(frame); // peers hosting this group's members deliver it
+}
+
+void ClusterMgr::SendGroupStateChange(uint32 groupId, uint8 reason)
+{
+    if (!m_enabled || !groupId)
+        return;
+
+    ByteBuffer payload;
+    payload << uint32(groupId);
+    payload << uint8(reason);
+
+    ByteBuffer frame;
+    ClusterFrame::Build(frame, CLUSTER_MSG_GROUP_STATE, payload);
+    EnqueueBroadcast(frame); // peers re-read the shared DB for this group
+}
+
 void ClusterMgr::ProcessNetwork()
 {
     if (!m_enabled)
@@ -466,6 +504,48 @@ void ClusterMgr::DrainInbound()
                             break;
                         }
                     }
+                }
+                break;
+            }
+            case CLUSTER_MSG_RELAY_GROUP_CHAT:
+            {
+                // Phase 7: a party/raid chat relayed from another node. Deliver to the
+                // members of this group that live on THIS node. The origin already
+                // delivered locally and does not process its own broadcast, so there is
+                // no double-delivery.
+                if (frame.size() > 1)
+                {
+                    ByteBuffer buf;
+                    buf.append(&frame[1], frame.size() - 1);
+                    uint8 chatType = 0, fromTag = 0;
+                    uint32 lang = 0, groupId = 0;
+                    uint64 fromGuid = 0;
+                    int32 subGroup = -1;
+                    std::string fromName, text;
+                    buf >> chatType >> lang >> groupId >> fromGuid >> fromTag
+                        >> fromName >> text >> subGroup;
+
+                    if (Group* group = sObjectMgr.GetGroupById(groupId))
+                        group->DeliverRelayedChat(chatType, lang, ObjectGuid(fromGuid),
+                            fromTag, fromName, text, subGroup);
+                }
+                break;
+            }
+            case CLUSTER_MSG_GROUP_STATE:
+            {
+                // Phase 7: a group's roster/leader/state changed on another node. The
+                // authoritative roster lives in the shared DB; here we just refresh the
+                // local view and re-push the group frame to our local members.
+                if (frame.size() >= 1 + 4 + 1)
+                {
+                    ByteBuffer buf;
+                    buf.append(&frame[1], frame.size() - 1);
+                    uint32 groupId = 0;
+                    uint8 reason = 0;
+                    buf >> groupId >> reason;
+
+                    if (Group* group = sObjectMgr.GetGroupById(groupId))
+                        group->OnRelayedStateChange(reason);
                 }
                 break;
             }

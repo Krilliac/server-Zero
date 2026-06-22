@@ -96,6 +96,19 @@ class ClusterMgr
                              std::string const& fromName, std::string const& toName,
                              std::string const& text, uint32 destId = 0, uint32 team = 0);
 
+        // Phase 7: relay a PARTY/RAID/RAID_LEADER/RAID_WARNING message to peers; the
+        // node(s) hosting that group's members deliver it locally. groupId is the
+        // persistent group id (Group::GetId()); subGroup scopes plain party chat in a
+        // raid (the sender's sub-group), or -1 for the whole group.
+        void   SendGroupChatRelay(uint8 chatType, uint32 lang, uint32 groupId,
+                                  uint64 fromGuid, uint8 fromTag, std::string const& fromName,
+                                  std::string const& text, int32 subGroup = -1);
+
+        // Phase 7: announce that a group's roster/leader/state changed so peers can
+        // re-read the shared DB and refresh their local members. reason is a
+        // ClusterGroupStateReason. Minimal, DB-backed; no phantom Players on the wire.
+        void   SendGroupStateChange(uint32 groupId, uint8 reason);
+
         // Drain queued inbound peer messages. Called every world tick (cheap when
         // idle) so chat/migration relays have low latency, not the 30s heartbeat tick.
         void   ProcessNetwork();

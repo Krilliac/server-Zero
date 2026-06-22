@@ -59,6 +59,9 @@
 #include "LootMgr.h"
 #include "LFGMgr.h"
 #include "LFGHandler.h"
+#include "Chat.h"
+#include "ClusterMgr.h"
+#include "ClusterMessage.h"
 
 #ifdef ENABLE_ELUNA
 #include "LuaEngine.h"
@@ -466,6 +469,10 @@ bool Group::AddMember(ObjectGuid guid, const char* name, uint8 joinMethod)
         }
     }
 
+    // Cluster: a member joined — tell peers so cross-node roster awareness refreshes.
+    if (sClusterMgr->IsEnabled() && GetId())
+        sClusterMgr->SendGroupStateChange(GetId(), CLUSTER_GROUP_STATE_ROSTER);
+
     return true;
 }
 
@@ -595,6 +602,10 @@ void Group::ChangeLeader(ObjectGuid guid)
     data << slot->name;
     BroadcastPacket(&data, true);
     SendUpdate();
+
+    // Cluster: tell peers this group's leader changed so cross-node members refresh.
+    if (sClusterMgr->IsEnabled() && GetId())
+        sClusterMgr->SendGroupStateChange(GetId(), CLUSTER_GROUP_STATE_LEADER);
 }
 
 /**
@@ -1756,6 +1767,31 @@ void Group::BroadcastPacket(WorldPacket* packet, bool ignorePlayersInBGRaid, int
             pl->GetSession()->SendPacket(packet);
         }
     }
+}
+
+void Group::DeliverRelayedChat(uint32 chatType, uint32 lang, ObjectGuid fromGuid,
+                               uint32 chatTag, const std::string& fromName,
+                               const std::string& msg, int32 subGroup)
+{
+    // Build the chat packet exactly as the local PARTY/RAID handlers do, then deliver
+    // it to this group's online members on THIS node only. The origin node delivered
+    // to its own members and does not process its own broadcast (no double-delivery).
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, ChatMsg(chatType), msg.c_str(), Language(lang),
+        ChatTagFlags(chatTag), fromGuid, fromName.c_str());
+
+    // For plain party chat inside a raid the origin scoped to the sender's sub-group;
+    // mirror that here. RAID/RAID_LEADER/RAID_WARNING pass subGroup = -1 (whole group).
+    BroadcastPacket(&data, false, subGroup);
+}
+
+void Group::OnRelayedStateChange(uint8 /*reason*/)
+{
+    // The authoritative roster/leader live in the shared DB (group/group_member),
+    // which all nodes read. We do not rebuild membership from the wire (no phantom
+    // Players); we simply re-push the group frame so locally-online members refresh
+    // their party UI (online status, leader, etc.).
+    SendUpdate();
 }
 
 /**
