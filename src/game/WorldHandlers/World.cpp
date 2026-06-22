@@ -112,6 +112,7 @@
 // ANTICHEAT
 #include "AntiCheatMgr.h"
 #include "ClusterMgr.h"
+#include "GatewayIntake.h"
 #include "PerformanceMonitor.h"
 
 #include <iostream>
@@ -1713,6 +1714,20 @@ void World::SetInitialWorldSettings()
     sLog.outString("Initializing Cluster framework...");
     sClusterMgr->Init();
     sLog.outString();
+
+    // Cluster gateway intake (Task 6): accept the cluster gateway's internal
+    // connection and run pre-authed plaintext sessions fed by the gateway.
+    // Additive + gated: with Gateway.IntakePort = 0 (default) NOTHING starts and
+    // a normal boot is unchanged.
+    {
+        uint32 intakePort = sConfig.GetIntDefault("Gateway.IntakePort", 0);
+        if (intakePort > 0 && intakePort <= 65535)
+        {
+            sLog.outString("Starting Gateway intake...");
+            sGatewayIntake.Start((uint16)intakePort);
+            sLog.outString();
+        }
+    }
 
     sLog.outString("Deleting expired bans...");
     LoginDatabase.Execute("DELETE FROM `ip_banned` WHERE `unbandate`<=UNIX_TIMESTAMP() AND `unbandate`<>`bandate`");

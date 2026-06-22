@@ -36,6 +36,7 @@
 #include "ObjectAccessor.h"
 #include "MapManager.h"
 #include "ClusterMgr.h"
+#include "GatewayIntake.h"
 #include "Database/DatabaseEnv.h"
 
 #include <chrono>
@@ -153,6 +154,7 @@ int WorldThread::svc()
     sWorld.UpdateSessions(1);                               // real players unload required UpdateSessions call
     sLog.outString("[shutdown] final UpdateSessions done");
     sClusterMgr->Shutdown();                                // flag this node offline (DB still alive here)
+    sGatewayIntake.Stop();                                  // stop gateway intake listener (no-op if gated off)
     sLog.outString("[shutdown] StopNetwork: ending reactor + joining network threads...");
     sWorldSocketMgr->StopNetwork();
     sLog.outString("[shutdown] StopNetwork done");

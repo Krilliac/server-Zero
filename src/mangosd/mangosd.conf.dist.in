@@ -1964,6 +1964,18 @@ Cluster.VisualDebug          = 0
 Cluster.Visual.IntervalMs    = 6000
 Cluster.Chat.TagNode         = 0
 
+#    Gateway.IntakePort
+#        Cluster gateway intake (Task 6). When > 0, this node opens an internal
+#        TCP listener on the given port and accepts the cluster gateway's
+#        connection, running PRE-AUTHED, PLAINTEXT WorldSessions tunnelled by the
+#        gateway (the gateway has already performed the client SRP6 auth, so
+#        there is no per-node encryption). When 0 (the default) NOTHING extra
+#        runs and a normal mangosd boot is unchanged. This is independent of the
+#        Cluster.* switches above; it only needs to be set on nodes fronted by a
+#        gateway.
+#        Default: 0 (off)
+Gateway.IntakePort           = 0
+
 #    Debug Visualizer (Slice 2) — diagnostic only, no gameplay effect.
 #    When enabled (requires AntiCheat.Enable=1) the server spawns temporary,
 #    colour-coded gameobjects trailing players to visualise the detection

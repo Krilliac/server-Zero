@@ -855,6 +855,24 @@ class WorldSession
         // for Warden
         uint16 GetClientBuild() const { return _build; }
 
+        // --- Cluster gateway intake (Task 6) ---------------------------------
+        // A gateway-fronted session has no real client WorldSocket: the gateway
+        // already authed the client and tunnels plaintext packets to/from this
+        // node. When set, SendPacket frames outgoing packets to the gateway as
+        // GW_CLIENT_PACKET instead of an (absent) encrypted m_Socket, and the
+        // recv-queue/logout guards in Update() treat the missing m_Socket as a
+        // live connection for as long as the gateway keeps the client open.
+        void SetGatewayFronted(uint32 clientId)
+        {
+            m_gatewayFronted = true;
+            m_gatewayClientId = clientId;
+        }
+        bool IsGatewayFronted() const { return m_gatewayFronted; }
+        uint32 GetGatewayClientId() const { return m_gatewayClientId; }
+        // Called by the gateway intake when the client is released or the gateway
+        // link drops: marks the session for normal teardown on the next Update().
+        void ClearGatewayFronted() { m_gatewayFronted = false; }
+
     private:
         // private trade methods
         void moveItems(Item* myItems[], Item* hisItems[]);
@@ -904,6 +922,9 @@ class WorldSession
         TutorialDataState m_tutorialState;
         uint32 m_clientTimeDelay;
         ObjectGuid m_npcWatchLastGuid;
+        // Cluster gateway intake (Task 6): identity of this session on the gateway.
+        bool   m_gatewayFronted;
+        uint32 m_gatewayClientId;
         ACE_Based::LockedQueue<WorldPacket*, ACE_Thread_Mutex> _recvQueue;
 };
 #endif

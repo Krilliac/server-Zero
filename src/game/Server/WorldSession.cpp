@@ -54,6 +54,7 @@
 #include "WorldSession.h"
 #include "Player.h"
 #include "ClusterMgr.h"
+#include "GatewayIntake.h"
 #include "AntiCheatMgr.h"
 #include "ObjectMgr.h"
 #include "Group.h"
@@ -153,7 +154,8 @@ WorldSession::WorldSession(uint32 id, WorldSocket* sock, AccountTypes sec, time_
     m_sessionDbcLocale(sWorld.GetAvailableDbcLocale(locale)), m_sessionDbLocaleIndex(sObjectMgr.GetIndexForLocale(locale)),
     m_latency(0), m_latIdx(0), m_latCount(0), m_latEWMA(0), m_latMin(0), m_latMax(0),
     m_desyncPending(false), m_desyncValue(0),
-    m_clientTimeDelay(0), m_tutorialState(TUTORIALDATA_UNCHANGED), m_npcWatchLastGuid()
+    m_clientTimeDelay(0), m_tutorialState(TUTORIALDATA_UNCHANGED), m_npcWatchLastGuid(),
+    m_gatewayFronted(false), m_gatewayClientId(0)
 {
     memset(m_latSamples, 0, sizeof(m_latSamples));
 
@@ -275,6 +277,20 @@ void WorldSession::SendPacket(WorldPacket const* packet)
     }
 #endif
 
+    // Cluster gateway intake (Task 6): a gateway-fronted session has no real
+    // client socket. Frame the outgoing packet as GW_CLIENT_PACKET and hand it
+    // to the gateway intake, which tunnels it back over the gateway connection.
+    if (m_gatewayFronted)
+    {
+        if (opcodeTable[packet->GetOpcode()].status == STATUS_UNHANDLED)
+        {
+            sLog.outError("SESSION: tried to send an unhandled opcode 0x%.4X", packet->GetOpcode());
+            return;
+        }
+        sGatewayIntake.SendToClient(m_gatewayClientId, packet->GetOpcode(), packet->contents(), (uint32)packet->size());
+        return;
+    }
+
     if (!m_Socket)
     {
         return;
@@ -358,7 +374,10 @@ bool WorldSession::Update(PacketFilter& updater)
     ///- Retrieve packets from the receive queue and call the appropriate handlers
     /// not process packets if socket already closed
     WorldPacket* packet = NULL;
-    while (m_Socket && !m_Socket->IsClosed() && _recvQueue.next(packet, updater))
+    // Cluster gateway intake (Task 6): a gateway-fronted session has no real
+    // m_Socket but is "connected" as long as the gateway keeps the client open,
+    // so its recv queue must still be drained through the normal opcode handlers.
+    while (((m_gatewayFronted) || (m_Socket && !m_Socket->IsClosed())) && _recvQueue.next(packet, updater))
     {
         /**#if 1
          * sLog.outError( "MOEP: %s (0x%.4X)",
@@ -515,7 +534,12 @@ bool WorldSession::Update(PacketFilter& updater)
     {
         ///- If necessary, log the player out
         time_t currTime = time(NULL);
-        if (!m_Socket || (ShouldLogOut(currTime) && !m_playerLoading))
+        // Cluster gateway intake (Task 6): a fronted session is "connected" while
+        // the gateway holds the client; only normal logout-cooldown applies. Once
+        // the gateway releases it (ClearGatewayFronted), the !m_Socket path runs
+        // and the session is logged out and removed like a dropped client.
+        bool connected = m_gatewayFronted || (m_Socket != NULL);
+        if (!connected || (ShouldLogOut(currTime) && !m_playerLoading))
         {
             LogoutPlayer(true);
         }
@@ -526,7 +550,7 @@ bool WorldSession::Update(PacketFilter& updater)
             _warden->Update();
         }
 
-        if (!m_Socket)
+        if (!connected)
         {
             return false;                                    // Will remove this session from the world session map
         }
