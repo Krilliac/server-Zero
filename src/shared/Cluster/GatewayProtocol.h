@@ -51,8 +51,16 @@
  *                        frame. Until this succeeds the link is unauthenticated
  *                        and every other frame type is rejected.
  *
- * Types 4-7 are reserved for later phases (prepare/ready/migrate hand-off) and
- * are unused in Phase 1.
+ * Phase 3 (transparent migration) payloads:
+ *   GW_MIGRATE_REQUEST : uint32 clientId, uint32 destNode, uint32 charGuid
+ *                        node A -> gateway: flip this client's backend to destNode.
+ *   GW_SESSION_PREPARE : uint32 clientId, uint32 accountId, uint32 charGuid,
+ *                        uint8 locale, uint32 security, uint32 destNode
+ *                        gateway -> node B: stage (load) the migrating character.
+ *   GW_SESSION_READY   : uint32 clientId, uint8 ok
+ *                        node B -> gateway: 1 = staged, 0 = failed.
+ *   GW_MIGRATE_ABORT   : uint32 clientId
+ *                        gateway -> node A: B failed; un-quiesce the saved session.
  */
 
 #ifndef MANGOS_GATEWAYPROTOCOL_H

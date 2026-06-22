@@ -64,6 +64,7 @@
 class GatewayLink;
 class WorldSession;
 class ACE_Reactor;
+class ByteBuffer;
 
 template <class T, class A> class ACE_Acceptor;
 class ACE_SOCK_ACCEPTOR;
@@ -108,6 +109,16 @@ class GatewayIntake : public ACE_Task_Base
         // thread writes them to the gateway connection.
         void SendToClient(uint32 clientId, uint16 opcode, const uint8* data, uint32 len);
 
+        // Cluster gateway migration (Phase 3): ask the gateway to flip a fronted
+        // client to a new backend node. Frames GW_MIGRATE_REQUEST{clientId,
+        // destNode, charGuid} onto the active gateway link's outbound queue.
+        // Called from the world thread (Player::GatewayMigrateOrKick).
+        void RequestMigrate(uint32 clientId, uint32 destNode, uint32 charGuid);
+
+        // Node-B PREPARE reply: frame GW_SESSION_READY{clientId, ok} to the
+        // gateway. Called from the network thread (GatewayLink prepare handler).
+        void SendReady(uint32 clientId, bool ok);
+
         // ---- called from the network thread (GatewayLink) ------------------
         // Register / look up / drop fronted sessions by gateway clientId.
         void RegisterSession(uint32 clientId, WorldSession* session);
@@ -124,6 +135,8 @@ class GatewayIntake : public ACE_Task_Base
         GatewayIntake& operator=(GatewayIntake const&) = delete;
 
         void flushOutbound();   // network thread: drain m_outQueue -> gateway link
+        // Frame + enqueue an arbitrary control frame (Phase 3 migration frames).
+        void enqueueFrame(uint8 type, ByteBuffer const& payload);
 
         typedef ACE_Acceptor<GatewayLink, ACE_SOCK_ACCEPTOR> GatewayAcceptor;
 

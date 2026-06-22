@@ -203,6 +203,8 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
                     case GW_SESSION_OPEN:    handleSessionOpen(in);    break;
                     case GW_CLIENT_PACKET:   handleClientPacket(in);   break;
                     case GW_SESSION_RELEASE: handleSessionRelease(in); break;
+                    case GW_SESSION_PREPARE: handleSessionPrepare(in); break;
+                    case GW_MIGRATE_ABORT:   handleMigrateAbort(in);   break;
                     default:
                         // Reserved/unsupported types are ignored in this phase.
                         DEBUG_LOG("GatewayLink: ignoring frame type %u (%u bytes)", type, len);
@@ -317,6 +319,93 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
             uint32 clientId; in >> clientId;
             sGatewayIntake.ReleaseSession(clientId);
             sLog.outString("Gateway intake: released fronted session clientId %u", clientId);
+        }
+
+        // GW_SESSION_PREPARE (node B): uint32 clientId, uint32 accountId,
+        //   uint32 charGuid, uint8 locale, uint32 security, uint32 destNode.
+        // Stage a migrating session on this (destination) node: create a
+        // gateway-fronted WorldSession exactly as GW_SESSION_OPEN does, mark it
+        // "migration-arriving" (so the login path picks the resume — Task 3),
+        // then drive a normal character login for charGuid by queueing a synthetic
+        // CMSG_PLAYER_LOGIN. The standard HandlePlayerLoginOpcode loads the
+        // player from the (already-saved-by-A) shared DB. Reply GW_SESSION_READY
+        // {clientId, ok}: ok=1 if the session was admitted, ok=0 otherwise.
+        void handleSessionPrepare(ByteBuffer& in)
+        {
+            uint32 clientId;  in >> clientId;
+            uint32 accountId; in >> accountId;
+            uint32 charGuid;  in >> charGuid;
+            uint8  locale;    in >> locale;
+            uint32 security;  in >> security;
+            uint32 destNode;  in >> destNode;
+
+            bool ok = false;
+            do
+            {
+                if (sGatewayIntake.FindSession(clientId))
+                {
+                    sLog.outError("Gateway intake: GW_SESSION_PREPARE for already-open clientId %u (account %u); ignoring",
+                                  clientId, accountId);
+                    break;
+                }
+                if (!accountId || !charGuid)
+                {
+                    sLog.outError("Gateway intake: GW_SESSION_PREPARE with empty account/char (clientId %u); cannot stage",
+                                  clientId);
+                    break;
+                }
+
+                if (security > SEC_ADMINISTRATOR)
+                    security = SEC_ADMINISTRATOR;
+                LocaleConstant loc = locale >= MAX_LOCALE ? LOCALE_enUS : LocaleConstant(locale);
+
+                // Same pre-authed plaintext session as GW_SESSION_OPEN.
+                WorldSession* session = new WorldSession(accountId, NULL, AccountTypes(security), 0, loc);
+                session->SetGatewayFronted(clientId);
+                // Mark as a migration arrival (not a fresh login) so the login path
+                // can choose the loading-screen / seamless resume in Task 3.
+                session->SetGatewayMigrationArriving(true);
+                session->LoadTutorialsData();
+
+                sGatewayIntake.RegisterSession(clientId, session);
+                sWorld.AddSession(session);
+
+                // Drive the real login path: a synthetic CMSG_PLAYER_LOGIN with the
+                // 8-byte guid. HandlePlayerLoginOpcode loads the char from the shared
+                // DB on the world thread. We have admitted the session, so we report
+                // ok now; the actual map-add happens asynchronously on node B.
+                WorldPacket* login = new WorldPacket(CMSG_PLAYER_LOGIN, 8);
+                ObjectGuid guid(HIGHGUID_PLAYER, charGuid);
+                *login << guid;
+                session->QueuePacket(login);
+
+                ok = true;
+                sLog.outString("Gateway intake: GW_SESSION_PREPARE staged migrating clientId %u "
+                               "(account %u, char guid %u, from migration to node %u); queued player login.",
+                               clientId, accountId, charGuid, destNode);
+            } while (false);
+
+            // Reply GW_SESSION_READY{clientId, ok}.
+            sGatewayIntake.SendReady(clientId, ok);
+
+            if (!ok)
+                sLog.outError("Gateway intake: GW_SESSION_PREPARE FAILED for clientId %u; replied GW_SESSION_READY ok=0", clientId);
+        }
+
+        // GW_MIGRATE_ABORT (node A / source): uint32 clientId.
+        // Node B failed/timed out — un-quiesce the still-alive saved session so the
+        // player keeps playing here. The session was saved but never destroyed.
+        void handleMigrateAbort(ByteBuffer& in)
+        {
+            uint32 clientId; in >> clientId;
+            WorldSession* session = sGatewayIntake.FindSession(clientId);
+            if (!session)
+            {
+                sLog.outError("Gateway intake: GW_MIGRATE_ABORT for unknown clientId %u; nothing to un-quiesce", clientId);
+                return;
+            }
+            session->SetGatewayMigrating(false);
+            sLog.outString("Gateway intake: GW_MIGRATE_ABORT clientId %u — un-quiesced; player stays on this node.", clientId);
         }
 
         std::vector<uint8> m_buf;
@@ -491,6 +580,49 @@ void GatewayIntake::SendToClient(uint32 clientId, uint16 opcode, const uint8* da
 
     std::lock_guard<std::mutex> guard(m_outLock);
     m_outQueue.push_back(bytes);
+}
+
+// Cluster gateway migration (Phase 3): enqueue a fully-built control frame onto
+// the outbound queue (drained by the network thread). Shared by RequestMigrate
+// and the GW_SESSION_READY reply.
+void GatewayIntake::enqueueFrame(uint8 type, ByteBuffer const& payload)
+{
+    if (!m_running)
+        return;
+
+    ByteBuffer frame;
+    GatewayFrame::Build(frame, type, payload);
+
+    std::vector<uint8> bytes;
+    if (frame.size())
+        bytes.assign(frame.contents(), frame.contents() + frame.size());
+
+    std::lock_guard<std::mutex> guard(m_outLock);
+    m_outQueue.push_back(bytes);
+}
+
+void GatewayIntake::RequestMigrate(uint32 clientId, uint32 destNode, uint32 charGuid)
+{
+    // GW_MIGRATE_REQUEST: uint32 clientId, uint32 destNode, uint32 charGuid
+    ByteBuffer payload;
+    payload << clientId;
+    payload << destNode;
+    payload << charGuid;
+    enqueueFrame((uint8)GW_MIGRATE_REQUEST, payload);
+
+    sLog.outString("Gateway intake: sent GW_MIGRATE_REQUEST clientId %u -> node %u (char guid %u).",
+                   clientId, destNode, charGuid);
+}
+
+void GatewayIntake::SendReady(uint32 clientId, bool ok)
+{
+    // GW_SESSION_READY: uint32 clientId, uint8 ok
+    ByteBuffer payload;
+    payload << clientId;
+    payload << (uint8)(ok ? 1 : 0);
+    enqueueFrame((uint8)GW_SESSION_READY, payload);
+
+    sLog.outString("Gateway intake: sent GW_SESSION_READY clientId %u ok=%u.", clientId, ok ? 1 : 0);
 }
 
 // ---- network thread -------------------------------------------------------

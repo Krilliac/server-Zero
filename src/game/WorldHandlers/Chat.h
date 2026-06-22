@@ -269,6 +269,9 @@ class ChatHandler
         bool HandleClusterSimGroupCommand(char* args);
         bool HandleClusterFailoverCommand(char* args);
 
+        // Cluster gateway (Phase 3) commands
+        bool HandleGatewayMigrateCommand(char* args);
+
         // Anti-Cheat framework commands
         bool HandleAntiCheatStatusCommand(char* args);
         bool HandleAntiCheatTopCommand(char* args);

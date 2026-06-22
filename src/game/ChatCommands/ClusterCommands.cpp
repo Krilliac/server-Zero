@@ -199,6 +199,72 @@ bool ChatHandler::HandleClusterMigrateCommand(char* args)
     return true;
 }
 
+// --- Gateway migration test command (Phase 3) ---
+// .gateway migrate <playerName> <nodeId>
+// Mechanical trigger for the transparent (gateway-fronted) migration: finds the
+// online player by name and, if its session is gateway-fronted, runs the same
+// GatewayMigrateOrKick chokepoint used by the auto-migrate zone-crossing path.
+// A non-fronted (normal client) session is rejected here — use .cluster migrate
+// for the disconnect-reconnect path. SEC_ADMINISTRATOR, console-usable.
+bool ChatHandler::HandleGatewayMigrateCommand(char* args)
+{
+    if (!sClusterMgr->IsEnabled())
+    {
+        SendSysMessage("Cluster: disabled (Cluster.Enable = 0).");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    if (!sClusterMgr->IsMigrationEnabled())
+    {
+        SendSysMessage("Cluster: migration disabled (Cluster.EnableMigration = 0).");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    char* nameStr = ExtractArg(&args);
+    char* nodeStr = ExtractArg(&args);
+    if (!nameStr || !nodeStr)
+    {
+        SendSysMessage("Syntax: .gateway migrate <playerName> <nodeId>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    uint32 nodeId = (uint32)atoi(nodeStr);
+    std::string name = nameStr;
+    if (!normalizePlayerName(name))
+    {
+        SendSysMessage("Gateway: invalid player name.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    Player* target = sObjectAccessor.FindPlayerByName(name.c_str());
+    if (!target)
+    {
+        PSendSysMessage("Gateway: player '%s' is not online on this node.", name.c_str());
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    WorldSession* session = target->GetSession();
+    if (!session || !session->IsGatewayFronted())
+    {
+        PSendSysMessage("Gateway: %s is not a gateway-fronted session (use .cluster migrate for the "
+                        "disconnect-reconnect path).", target->GetName());
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    if (target->GatewayMigrateOrKick(nodeId))
+        PSendSysMessage("Gateway: migrating %s to node %u transparently (no reconnect; saved + quiesced, "
+                        "awaiting gateway switch).", target->GetName(), nodeId);
+    else
+        PSendSysMessage("Gateway: migration of %s to node %u refused — check the server log "
+                        "(CanMigrate gate / target node id).", target->GetName(), nodeId);
+    return true;
+}
+
 bool ChatHandler::HandleClusterVisualCommand(char* args)
 {
     if (!args || !*args)

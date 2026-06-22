@@ -155,7 +155,8 @@ WorldSession::WorldSession(uint32 id, WorldSocket* sock, AccountTypes sec, time_
     m_latency(0), m_latIdx(0), m_latCount(0), m_latEWMA(0), m_latMin(0), m_latMax(0),
     m_desyncPending(false), m_desyncValue(0),
     m_clientTimeDelay(0), m_tutorialState(TUTORIALDATA_UNCHANGED), m_npcWatchLastGuid(),
-    m_gatewayFronted(false), m_gatewayClientId(0)
+    m_gatewayFronted(false), m_gatewayClientId(0),
+    m_gatewayMigrating(false), m_gatewayMigrationArriving(false)
 {
     memset(m_latSamples, 0, sizeof(m_latSamples));
 
@@ -377,7 +378,14 @@ bool WorldSession::Update(PacketFilter& updater)
     // Cluster gateway intake (Task 6): a gateway-fronted session has no real
     // m_Socket but is "connected" as long as the gateway keeps the client open,
     // so its recv queue must still be drained through the normal opcode handlers.
-    while (((m_gatewayFronted) || (m_Socket && !m_Socket->IsClosed())) && _recvQueue.next(packet, updater))
+    //
+    // Cluster gateway migration (Phase 3): while quiescing for a migration, the
+    // player has been saved and node B is taking over — STOP draining this
+    // session's recv queue so we don't double-process the frozen player's inbound
+    // packets. The session/player object stays alive (un-quiesced on abort, or
+    // torn down on GW_SESSION_RELEASE). Buffered packets stay queued harmlessly.
+    while (!m_gatewayMigrating &&
+           ((m_gatewayFronted) || (m_Socket && !m_Socket->IsClosed())) && _recvQueue.next(packet, updater))
     {
         /**#if 1
          * sLog.outError( "MOEP: %s (0x%.4X)",

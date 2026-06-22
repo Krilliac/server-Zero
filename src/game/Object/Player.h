@@ -2074,6 +2074,15 @@ class Player : public Unit
         bool MigrateToNode(uint32 nodeId);
         static bool ValidateMigrationBlob(ByteBuffer& blob, uint32& guidOut);
 
+        // --- Cluster gateway migration (Phase 3): transparent hand-off ---------
+        // Single chokepoint for the migration trigger. For a gateway-fronted
+        // session it emits GW_MIGRATE_REQUEST to the gateway + SaveToDB + quiesce
+        // (no kick, transparent loading-screen/seamless resume on node B). For a
+        // normal client it falls back to MigrateToNode (disconnect-reconnect kick).
+        // Self-gates on CanMigrate + cluster/migration enable. Returns true if a
+        // migration was triggered.
+        bool GatewayMigrateOrKick(uint32 destNode);
+
         // Save the inventory and gold to the database
         void SaveInventoryAndGoldToDB(); // fast save function for item/money cheating preventing
 

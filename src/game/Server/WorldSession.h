@@ -873,6 +873,23 @@ class WorldSession
         // link drops: marks the session for normal teardown on the next Update().
         void ClearGatewayFronted() { m_gatewayFronted = false; }
 
+        // --- Cluster gateway migration (Phase 3) -----------------------------
+        // Source-node quiesce: while migrating, the session is saved to the shared
+        // DB but NOT destroyed. We must stop draining its recv queue (so we don't
+        // double-process the now-frozen player's inbound packets while node B takes
+        // over). The session/player object stays alive so a GW_MIGRATE_ABORT can
+        // un-quiesce it and the player keeps playing on this node. Only meaningful
+        // for a gateway-fronted session.
+        void SetGatewayMigrating(bool on) { m_gatewayMigrating = on; }
+        bool IsGatewayMigrating() const { return m_gatewayMigrating; }
+
+        // Destination-node arrival marker: set on the session created by a
+        // GW_SESSION_PREPARE so the login path can distinguish a transparent
+        // migration (loading-screen / seamless resume — Task 3) from a fresh
+        // first login. Cleared once consumed.
+        void SetGatewayMigrationArriving(bool on) { m_gatewayMigrationArriving = on; }
+        bool IsGatewayMigrationArriving() const { return m_gatewayMigrationArriving; }
+
     private:
         // private trade methods
         void moveItems(Item* myItems[], Item* hisItems[]);
@@ -925,6 +942,8 @@ class WorldSession
         // Cluster gateway intake (Task 6): identity of this session on the gateway.
         bool   m_gatewayFronted;
         uint32 m_gatewayClientId;
+        bool   m_gatewayMigrating;          // source-node quiesce (Phase 3 migration)
+        bool   m_gatewayMigrationArriving;  // dest-node: created by GW_SESSION_PREPARE
         ACE_Based::LockedQueue<WorldPacket*, ACE_Thread_Mutex> _recvQueue;
 };
 #endif

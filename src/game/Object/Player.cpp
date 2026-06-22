@@ -51,6 +51,7 @@
 #include "Formulas.h"
 #include "Group.h"
 #include "ClusterMgr.h"
+#include "GatewayIntake.h"
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "Pet.h"
@@ -21071,6 +21072,16 @@ bool Player::MigrateToNode(uint32 nodeId)
     if (!nodeId || nodeId == sClusterMgr->GetNodeId())
         return false;
 
+    // Cluster gateway migration (Phase 3): a gateway-fronted session does a
+    // TRANSPARENT hand-off (no kick / no reconnect) — the gateway swaps the
+    // backend node behind the client's persistent connection. Any caller of
+    // MigrateToNode (UpdateZone cross-node, the force-migrate command) therefore
+    // gets the gateway path automatically when the session is fronted; only a
+    // normal client falls through to the disconnect-reconnect path below.
+    WorldSession* session = GetSession();
+    if (session && session->IsGatewayFronted())
+        return GatewayMigrateOrKick(nodeId);
+
     std::string reason;
     if (!CanMigrate(reason))
     {
@@ -21102,6 +21113,61 @@ bool Player::MigrateToNode(uint32 nodeId)
 
     if (GetSession())
         GetSession()->KickPlayer();
+    return true;
+}
+
+// Gateway-fronted transparent migration (Phase 3). The owning session lives
+// behind the cluster gateway: instead of kicking for a reconnect, we ask the
+// gateway to flip the client's backend node (GW_MIGRATE_REQUEST). We SaveToDB
+// (the shared DB is the source of truth node B loads from) and quiesce this
+// session — it is saved but NOT destroyed, so a GW_MIGRATE_ABORT can revive it
+// and the player keeps playing here. The gateway releases this node (and we
+// tear the session down) only after it has confirmed node B is ready.
+bool Player::GatewayMigrateOrKick(uint32 destNode)
+{
+    WorldSession* session = GetSession();
+    if (!session || !session->IsGatewayFronted())
+        return false;
+
+    if (!sClusterMgr->IsEnabled() || !sClusterMgr->IsMigrationEnabled())
+        return false;
+    if (!destNode || destNode == sClusterMgr->GetNodeId())
+        return false;
+
+    std::string reason;
+    if (!CanMigrate(reason))
+    {
+        sLog.outString("Cluster gateway: migrate refused for %s (guid %u): %s",
+                       GetName(), GetGUIDLow(), reason.c_str());
+        return false;
+    }
+
+    // Persist to the shared DB BEFORE the gateway hands the client to node B —
+    // exactly-one-authority ordering (A saves before B loads).
+    SaveToDB();
+
+    // Record the affinity so node B's login routing lands the char on the right
+    // node (and a later reconnect would too). Dedicated table — the characters
+    // row is rewritten by SaveToDB, so it must not hold the assignment.
+    CharacterDatabase.PExecute("REPLACE INTO `cluster_character_node` (`guid`,`node_id`) VALUES (%u,%u)",
+                               GetGUIDLow(), destNode);
+
+    // Ask the gateway to flip the client's forward-target to node B.
+    sGatewayIntake.RequestMigrate(session->GetGatewayClientId(), destNode, GetGUIDLow());
+
+    // Quiesce: stop processing this (now-frozen) player's inbound packets so we
+    // don't double-process while node B takes over. The session/player object is
+    // left ALIVE — un-quiesced on GW_MIGRATE_ABORT, or torn down on the gateway's
+    // GW_SESSION_RELEASE once the switch commits. Do NOT kick.
+    session->SetGatewayMigrating(true);
+
+    sLog.outString("Cluster gateway: migrating %s (guid %u) to node %u via gateway (clientId %u); "
+                   "saved + quiesced, awaiting gateway switch (no kick).",
+                   GetName(), GetGUIDLow(), destNode, session->GetGatewayClientId());
+
+    if (sClusterMgr->VisualDebugEnabled())
+        PlaySpellVisual(sClusterMgr->GetMigrateVisualKit());
+
     return true;
 }
 

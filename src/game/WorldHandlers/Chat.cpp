@@ -271,6 +271,13 @@ ChatCommand* ChatHandler::getCommandTable()
         { NULL,             0,                  false, NULL,                                               "", NULL }
     };
 
+    // Cluster gateway (Phase 3): transparent migration test trigger. Console-ok.
+    static ChatCommand gatewayCommandTable[] =
+    {
+        { "migrate",        SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleGatewayMigrateCommand,           "", NULL },
+        { NULL,             0,                  false, NULL,                                               "", NULL }
+    };
+
     static ChatCommand anticheatCommandTable[] =
     {
         { "status",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatStatusCommand,          "", NULL },
@@ -827,6 +834,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "ahbot",          SEC_ADMINISTRATOR,  true,  NULL,                                           "", ahbotCommandTable    },
         { "anticheat",      SEC_GAMEMASTER,     true,  NULL,                                           "", anticheatCommandTable},
         { "cluster",        SEC_GAMEMASTER,     true,  NULL,                                           "", clusterCommandTable  },
+        { "gateway",        SEC_ADMINISTRATOR,  true,  NULL,                                           "", gatewayCommandTable  },
         { "spoof",          SEC_GAMEMASTER,     true,  &ChatHandler::HandleSpoofCommand,                "", NULL                 },
         { "timesync",       SEC_GAMEMASTER,     true,  NULL,                                           "", timesyncCommandTable },
         { "movement",       SEC_GAMEMASTER,     true,  NULL,                                           "", movementCommandTable },
