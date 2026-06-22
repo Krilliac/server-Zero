@@ -61,6 +61,31 @@ install(
     DESTINATION ${CONF_INSTALL_DIR}
 )
 
+# Standalone self-test for the auth digest (no DB / no socket). Pins the
+# CMSG_AUTH_SESSION SHA-1 byte-assembly order.
+add_executable(gateway_authtest
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gateway_auth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/GatewayAuth.cpp
+)
+
+target_compile_features(gateway_authtest PUBLIC cxx_std_17)
+set_target_properties(gateway_authtest PROPERTIES CXX_EXTENSIONS OFF)
+
+target_include_directories(gateway_authtest
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${OPENSSL_INCLUDE_DIR}
+)
+
+target_link_libraries(gateway_authtest
+    PUBLIC
+        shared
+        Threads::Threads
+        ${OPENSSL_LIBRARIES}
+        OpenSSL::Crypto
+        ace
+)
+
 if(WIN32 AND MSVC)
     install(
         FILES $<TARGET_PDB_FILE:gateway>

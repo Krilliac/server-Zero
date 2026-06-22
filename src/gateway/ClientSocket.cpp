@@ -44,16 +44,27 @@
 
 #include "ClientSocket.h"
 #include "ClientSocketMgr.h"
+#include "GatewayAuth.h"
 
 #include "Common.h"
 #include "Log.h"
 #include "Util.h"
 #include "ByteBuffer.h"
 
-/// SMSG_AUTH_CHALLENGE opcode (mirrors Opcodes.h; defined locally so the
-/// gateway does not have to pull in the game's opcode/session headers).
+#include "Database/DatabaseEnv.h"
+#include "Auth/BigNumber.h"
+#include "Auth/Sha1.h"   // for SHA_DIGEST_LENGTH
+
+/// Login database accessor (defined in Main.cpp).
+extern DatabaseType LoginDatabase;
+
+/// Opcode constants (mirror Opcodes.h; defined locally so the gateway does
+/// not have to pull in the game's opcode/session headers).
 #ifndef GATEWAY_SMSG_AUTH_CHALLENGE
 #define GATEWAY_SMSG_AUTH_CHALLENGE 0x1EC
+#endif
+#ifndef GATEWAY_CMSG_AUTH_SESSION
+#define GATEWAY_CMSG_AUTH_SESSION 0x1ED
 #endif
 
 #if defined( __GNUC__ )
@@ -88,6 +99,10 @@ ClientSocket::ClientSocket(void)
     m_Crypt(),
     m_Seed(rand32()),
     m_Authed(false),
+    m_AccountId(0),
+    m_AccountName(),
+    m_Security(0),
+    m_Locale(0),
     m_Header(sizeof(ClientPktHeader)),
     m_RecvPct(),
     m_RecvOpcode(0),
@@ -351,14 +366,144 @@ int ClientSocket::handle_input_header(void)
 int ClientSocket::handle_input_payload(void)
 {
     const size_t payloadLen = m_RecvPct.length();
+    const uint32 opcode = m_RecvOpcode;
 
-    sLog.outString("ClientSocket: recv from %s opcode 0x%04X (%u bytes payload)",
-        m_Address.c_str(), m_RecvOpcode, (uint32)payloadLen);
+    // Wrap the assembled payload in a ByteBuffer for structured parsing.
+    ByteBuffer recv;
+    if (payloadLen)
+    {
+        recv.append((const uint8*)m_RecvPct.rd_ptr(), payloadLen);
+    }
 
-    // Reset for the next packet.
+    // Reset receive state up front so every return path leaves us ready for
+    // the next packet.
     m_RecvPct.reset();
     m_Header.reset();
     m_RecvOpcode = 0;
+
+    int rc = 0;
+
+    if (!m_Authed)
+    {
+        // Pre-auth: only CMSG_AUTH_SESSION is accepted. Anything else is a
+        // protocol violation and closes the connection.
+        if (opcode == GATEWAY_CMSG_AUTH_SESSION)
+        {
+            if (HandleAuthSession(recv) == -1)
+            {
+                errno = ECONNRESET;
+                rc = -1;
+            }
+        }
+        else
+        {
+            sLog.outError("ClientSocket: client %s sent opcode 0x%04X before auth; closing",
+                m_Address.c_str(), opcode);
+            errno = ECONNRESET;
+            rc = -1;
+        }
+    }
+    else
+    {
+        // Post-auth: subsequent packets arrive with their headers decrypted
+        // (handle_input_header runs DecryptRecv now that m_Crypt is keyed).
+        // Routing of game opcodes to world nodes lands in a later task.
+        sLog.outString("ClientSocket: recv from %s (authed acct %u) opcode 0x%04X (%u bytes payload)",
+            m_Address.c_str(), m_AccountId, opcode, (uint32)payloadLen);
+    }
+
+    return rc;
+}
+
+/**
+ * @brief Validate CMSG_AUTH_SESSION and initialize the AuthCrypt.
+ *
+ * Parses the packet in the same field order as WorldSocket::HandleAuthSession
+ * (build:uint32, serverId/unk:uint32, account:cstring, clientSeed:uint32,
+ * digest:20 bytes), looks the account up in the login DB, recomputes the
+ * challenge digest via GatewayAuth::ValidateDigest and, on success, keys the
+ * crypt so all later traffic is encrypted.
+ *
+ * @param recv The CMSG_AUTH_SESSION payload (opcode already stripped).
+ * @return int Zero on success; -1 on any failure (caller closes the socket).
+ */
+int ClientSocket::HandleAuthSession(ByteBuffer& recv)
+{
+    uint32 build = 0;
+    uint32 unk2 = 0;
+    std::string account;
+    uint32 clientSeed = 0;
+    uint8 digest[SHA_DIGEST_LENGTH];
+
+    // Same field order as WorldSocket::HandleAuthSession.
+    try
+    {
+        recv >> build;
+        recv >> unk2;
+        recv >> account;
+        recv >> clientSeed;
+        recv.read(digest, SHA_DIGEST_LENGTH);
+    }
+    catch (ByteBufferException&)
+    {
+        sLog.outError("ClientSocket::HandleAuthSession: client %s sent a malformed CMSG_AUTH_SESSION",
+            m_Address.c_str());
+        return -1;
+    }
+
+    if (account.empty())
+    {
+        sLog.outError("ClientSocket::HandleAuthSession: client %s sent an empty account name",
+            m_Address.c_str());
+        return -1;
+    }
+
+    // Escape the account name for the lookup. The hash below must use the raw
+    // packet bytes (exactly as WorldSocket does), so keep a separate copy.
+    std::string safeAccount = account;
+    LoginDatabase.escape_string(safeAccount);
+
+    QueryResult* result = LoginDatabase.PQuery(
+        "SELECT `id`, `gmlevel`, `sessionkey`, `locale` FROM `account` WHERE `username` = '%s'",
+        safeAccount.c_str());
+
+    if (!result)
+    {
+        sLog.outError("ClientSocket::HandleAuthSession: unknown account '%s' from %s",
+            account.c_str(), m_Address.c_str());
+        return -1;
+    }
+
+    Field* fields = result->Fetch();
+
+    uint32 id       = fields[0].GetUInt32();
+    uint8  security = (uint8)fields[1].GetUInt16();
+    std::string sessionkey = fields[2].GetCppString();
+    uint8  locale   = fields[3].GetUInt8();
+
+    delete result;
+
+    BigNumber K;
+    K.SetHexStr(sessionkey.c_str());
+
+    if (!GatewayAuth::ValidateDigest(account, clientSeed, m_Seed, K, digest))
+    {
+        sLog.outError("ClientSocket::HandleAuthSession: digest mismatch for account '%s' from %s",
+            account.c_str(), m_Address.c_str());
+        return -1;
+    }
+
+    // Key the crypt: from here on header bytes are scrambled in both directions.
+    m_Crypt.SetKey(K.AsByteArray(40), 40);
+    m_Crypt.Init();
+
+    m_Authed      = true;
+    m_AccountId   = id;
+    m_AccountName = account;
+    m_Security    = security;
+    m_Locale      = locale;
+
+    sLog.outString("gateway: client %s authed (acct %u)", account.c_str(), id);
 
     return 0;
 }

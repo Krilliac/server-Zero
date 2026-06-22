@@ -117,6 +117,11 @@ class ClientSocket : protected ClientHandler
         int handle_input_payload(void);
         int handle_input_missing_data(void);
 
+        /// Validate CMSG_AUTH_SESSION, look up the account, verify the digest
+        /// and key the AuthCrypt. Returns 0 on success, -1 on failure (the
+        /// caller closes the connection on failure).
+        int HandleAuthSession(ByteBuffer& recv);
+
         /// Try to write a framed packet to m_OutBuffer; -1 if no space.
         /// Must be called with m_OutBufferLock held.
         int iSendPacket(uint16 opcode, const ByteBuffer& payload);
@@ -132,8 +137,14 @@ class ClientSocket : protected ClientHandler
         /// Server seed sent in SMSG_AUTH_CHALLENGE.
         uint32 m_Seed;
 
-        /// Set once the client completes the (future) auth handshake.
+        /// Set once the client completes the auth handshake (Task 3).
         bool m_Authed;
+
+        /// Account identity captured at auth time.
+        uint32 m_AccountId;
+        std::string m_AccountName;
+        uint8 m_Security;
+        uint8 m_Locale;
 
         /// Fragment of the received client header (6 bytes when full).
         ACE_Message_Block m_Header;
