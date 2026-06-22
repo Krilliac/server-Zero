@@ -41,6 +41,9 @@ if(BUILD_REALMD)
     add_subdirectory(realmd)
 endif()
 
+# Build the cluster gateway daemon
+add_subdirectory(gateway)
+
 # If we want the tools for map/vmap/mmap extraction
 if(BUILD_TOOLS)
     add_subdirectory(tools)

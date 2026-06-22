@@ -1,0 +1,53 @@
+################################################################################
+# Cluster gateway daemon configuration                                         #
+################################################################################
+
+[GatewayConf]
+ConfVersion=@MANGOS_REALM_VER@
+
+################################################################################
+# GATEWAY SETTINGS
+#
+#    LoginDatabaseInfo
+#    CharacterDatabaseInfo
+#        Connection settings for the realm/authentication and character databases
+#        Format: hostname;port;username;password;database
+#                Use named pipes at Windows
+#                .;somenumber;username;password;database
+#                Use Unix sockets on Unix/Linux
+#                .;/path/to/unix_socket;username;password;database
+#
+#    GatewayPort
+#        Port on which the gateway accepts inbound client connections
+#        Default: 8085
+#
+#    Node.N.Host
+#    Node.N.GatewayPort
+#        Per-node connection info for the cluster mesh (used in later tasks)
+#
+#    LogFile
+#        Logfile name
+#        Default: "Gateway.log"
+#                 "" - empty name disable creating log file
+#
+#    PidFile
+#        Gateway daemon PID file
+#        Default: "" Do not create a PID file.
+#
+#    LogLevel
+#        Server console level of logging
+#        0 = Minimum; 1 = Error; 2 = Detail; 3 = Full/Debug
+#        Default: 1
+#
+################################################################################
+LoginDatabaseInfo      = "127.0.0.1;3306;root;mangos;realmd"
+CharacterDatabaseInfo  = "127.0.0.1;3306;root;mangos;character0"
+
+GatewayPort            = 8085
+
+Node.1.Host            = 127.0.0.1
+Node.1.GatewayPort     = 9100
+
+LogFile                = "Gateway.log"
+PidFile                = ""
+LogLevel               = 1
