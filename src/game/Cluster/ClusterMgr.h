@@ -109,6 +109,20 @@ class ClusterMgr
         // ClusterGroupStateReason. Minimal, DB-backed; no phantom Players on the wire.
         void   SendGroupStateChange(uint32 groupId, uint8 reason);
 
+        // --- Phase 8: service-role decomposition + graceful fallback ---
+        // A logical service (role) is owned by a configured node and consumed
+        // cluster-wide. Every role degrades to LOCAL handling when the cluster is
+        // disabled, the role is unconfigured (owner 0), or the owner is offline.
+        uint32 GetServiceOwner(uint8 role) const;        // configured owner node, 0 = unconfigured/local
+        bool   IsServiceOwnerOnline(uint32 owner) const; // owner present+online in cluster_nodes
+        // Route a global announcement through the ANNOUNCE role. Returns true if it
+        // was routed to a live remote owner; false means it was handled LOCALLY here
+        // (the graceful-degradation fallback), which this method already performed.
+        bool   RouteAnnounce(std::string const& text);
+        // Perform the authoritative announcement locally (deliver to this node's
+        // players). Used both on the owner and on every fallback path.
+        void   DoLocalAnnounce(std::string const& text) const;
+
         // Drain queued inbound peer messages. Called every world tick (cheap when
         // idle) so chat/migration relays have low latency, not the 30s heartbeat tick.
         void   ProcessNetwork();
@@ -150,6 +164,7 @@ class ClusterMgr
 
         void RefreshPeers();     // world thread: rebuild m_peers from cluster_nodes
         void DrainInbound();     // world thread: process queued inbound frames
+        void LoadServiceConfig(); // Phase 8: read Cluster.Service.* role owners
         void EnqueueBroadcast(ByteBuffer const& frame);              // queue a wire frame for all peers
         void EnqueueDirected(uint32 target, ByteBuffer const& frame); // queue a wire frame for one peer
 
@@ -159,6 +174,7 @@ class ClusterMgr
         bool        m_visualDebug;
         bool        m_chatTag;
         uint32      m_visualIntervalMs;
+        uint32      m_svcAnnounceNode; // Phase 8: owner of CLUSTER_SERVICE_ANNOUNCE (0=local)
         uint32      m_nodeId;
         uint32      m_port;
         uint32      m_peerPort;  // inter-node listen/connect port

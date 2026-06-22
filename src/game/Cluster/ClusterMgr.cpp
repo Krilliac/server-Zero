@@ -25,6 +25,7 @@
 ClusterMgr::ClusterMgr()
     : m_enabled(false), m_migrationEnabled(false), m_autoMigrate(false),
       m_visualDebug(false), m_chatTag(false), m_visualIntervalMs(6000),
+      m_svcAnnounceNode(0),
       m_nodeId(1), m_port(0), m_peerPort(0), m_capacity(0),
       m_heartbeatSec(30), m_host("127.0.0.1"), m_net(NULL)
 {
@@ -47,9 +48,50 @@ void ClusterMgr::LoadConfig()
     m_capacity     = sWorld.GetPlayerAmountLimit();
     m_host         = sConfig.GetStringDefault("Cluster.Host", "127.0.0.1");
 
+    // Phase 8: service-role owners. Read like every other Cluster.* option.
+    LoadServiceConfig();
+
     // Load (or refresh, on .reload config) the zone->node assignment table.
     if (m_enabled)
         LoadZoneMap();
+}
+
+void ClusterMgr::LoadServiceConfig()
+{
+    // 0 (default) = role unconfigured -> every node handles it locally (no
+    // decomposition). A non-zero value names the node that OWNS the role. Read
+    // straight from sConfig so it can be set per node in mangosd.conf; cross-node
+    // agreement on the value is the operator's responsibility (see design notes).
+    m_svcAnnounceNode = (uint32)sConfig.GetIntDefault("Cluster.Service.AnnounceNode", 0);
+
+    if (m_enabled && m_svcAnnounceNode)
+        sLog.outString("Cluster: service role ANNOUNCE owned by node %u%s.",
+                       m_svcAnnounceNode,
+                       m_svcAnnounceNode == m_nodeId ? " (this node)" : "");
+}
+
+uint32 ClusterMgr::GetServiceOwner(uint8 role) const
+{
+    switch (role)
+    {
+        case CLUSTER_SERVICE_ANNOUNCE: return m_svcAnnounceNode;
+        default:                       return 0; // unknown role -> local
+    }
+}
+
+bool ClusterMgr::IsServiceOwnerOnline(uint32 owner) const
+{
+    if (!owner)
+        return false;
+    // The owner is "online" if its cluster_nodes row says so. MarkStaleOffline()
+    // already flips dead peers to 'offline', so this reuses the heartbeat liveness
+    // model — no separate health tracking. A NULL/empty result = treat as offline.
+    QueryResult* result = LoginDatabase.PQuery(
+        "SELECT 1 FROM `cluster_nodes` WHERE `node_id`=%u AND `status`='online' LIMIT 1",
+        owner);
+    bool online = (result != NULL);
+    delete result;
+    return online;
 }
 
 void ClusterMgr::LoadZoneMap()
@@ -373,6 +415,55 @@ void ClusterMgr::SendGroupStateChange(uint32 groupId, uint8 reason)
     EnqueueBroadcast(frame); // peers re-read the shared DB for this group
 }
 
+// ---- Phase 8: service-role routing + graceful fallback ----
+
+void ClusterMgr::DoLocalAnnounce(std::string const& text) const
+{
+    // The authoritative effect of the ANNOUNCE role: deliver to THIS node's
+    // players. Used by the owner (after a routed request) and by every fallback.
+    if (text.empty())
+        return;
+    sWorld.SendServerMessage(SERVER_MSG_CUSTOM, text.c_str());
+}
+
+bool ClusterMgr::RouteAnnounce(std::string const& text)
+{
+    // Decide local-vs-remote for the ANNOUNCE role. Returns true only when the op
+    // was handed to a remote owner; in every other case it has ALREADY performed
+    // the local fallback and returns false.
+    uint32 owner = GetServiceOwner(CLUSTER_SERVICE_ANNOUNCE);
+
+    // Fallback set: cluster disabled, role unconfigured (0), we ARE the owner, or
+    // the owner is offline -> handle locally. This is the graceful-degradation core.
+    if (!m_enabled || owner == 0 || owner == m_nodeId || !IsServiceOwnerOnline(owner))
+    {
+        DoLocalAnnounce(text);
+        // When we are the configured owner and the cluster is up, also fan the
+        // result out so peers deliver it cluster-wide (single authoritative source).
+        if (m_enabled && owner == m_nodeId)
+        {
+            ByteBuffer payload;
+            payload << uint8(CLUSTER_SERVICE_ANNOUNCE);
+            payload << text;
+            ByteBuffer frame;
+            ClusterFrame::Build(frame, CLUSTER_MSG_SERVICE_RESULT, payload);
+            EnqueueBroadcast(frame);
+        }
+        return false; // handled locally
+    }
+
+    // Owner is a live remote node: route the request to it (directed). The owner
+    // performs the op and broadcasts the SERVICE_RESULT so all nodes deliver it.
+    ByteBuffer payload;
+    payload << uint8(CLUSTER_SERVICE_ANNOUNCE);
+    payload << uint32(m_nodeId); // requester (for the owner's log/audit)
+    payload << text;
+    ByteBuffer frame;
+    ClusterFrame::Build(frame, CLUSTER_MSG_SERVICE_REQUEST, payload);
+    EnqueueDirected(owner, frame);
+    return true; // routed to the role owner
+}
+
 void ClusterMgr::ProcessNetwork()
 {
     if (!m_enabled)
@@ -546,6 +637,61 @@ void ClusterMgr::DrainInbound()
 
                     if (Group* group = sObjectMgr.GetGroupById(groupId))
                         group->OnRelayedStateChange(reason);
+                }
+                break;
+            }
+            case CLUSTER_MSG_SERVICE_REQUEST:
+            {
+                // Phase 8: we are the role owner and a peer routed an op to us. Run it
+                // authoritatively here (world thread), then broadcast the result so
+                // every node — including the requester — delivers it.
+                if (frame.size() > 1)
+                {
+                    ByteBuffer buf;
+                    buf.append(&frame[1], frame.size() - 1);
+                    uint8 role = 0;
+                    uint32 fromNode = 0;
+                    buf >> role;
+                    if (role == CLUSTER_SERVICE_ANNOUNCE)
+                    {
+                        std::string text;
+                        buf >> fromNode >> text;
+
+                        // Honour the request locally even if config drifted and we are
+                        // no longer the owner (never drop a routed op).
+                        DoLocalAnnounce(text);
+
+                        ByteBuffer payload;
+                        payload << uint8(CLUSTER_SERVICE_ANNOUNCE);
+                        payload << text;
+                        ByteBuffer out;
+                        ClusterFrame::Build(out, CLUSTER_MSG_SERVICE_RESULT, payload);
+                        EnqueueBroadcast(out);
+
+                        sLog.outString("Cluster: ANNOUNCE service ran for node %u: \"%s\"",
+                                       fromNode, text.c_str());
+                    }
+                }
+                break;
+            }
+            case CLUSTER_MSG_SERVICE_RESULT:
+            {
+                // Phase 8: the role owner finished an op and broadcast the result.
+                // Apply it to this node's players. The owner already delivered to its
+                // own players when it ran the op and does NOT process its own broadcast
+                // (origin skips self), so there is no double-delivery.
+                if (frame.size() > 1)
+                {
+                    ByteBuffer buf;
+                    buf.append(&frame[1], frame.size() - 1);
+                    uint8 role = 0;
+                    buf >> role;
+                    if (role == CLUSTER_SERVICE_ANNOUNCE)
+                    {
+                        std::string text;
+                        buf >> text;
+                        DoLocalAnnounce(text);
+                    }
                 }
                 break;
             }

@@ -22,6 +22,19 @@ enum ClusterMessageType
     CLUSTER_MSG_PLAYER_TRANSFER= 7, // migration hand-off: uint32 guid + serialized player blob (Phase 4)
     CLUSTER_MSG_RELAY_GROUP_CHAT = 8, // relayed party/raid chat (Phase 7): groupId-keyed
     CLUSTER_MSG_GROUP_STATE      = 9, // group roster/leader/state changed; peers re-read DB (Phase 7)
+    CLUSTER_MSG_SERVICE_REQUEST  = 10, // Phase 8: a service-role op routed to the role-owner node
+    CLUSTER_MSG_SERVICE_RESULT   = 11, // Phase 8: the role-owner's broadcast of a completed op
+};
+
+// Logical service roles (Phase 8). A role is owned by a configured node and
+// consumed cluster-wide; every role degrades to local handling when its owner
+// is unconfigured (0) or offline. Carried as a uint8 inside SERVICE_REQUEST/RESULT.
+enum ClusterServiceRole
+{
+    CLUSTER_SERVICE_ANNOUNCE = 1, // centralized global announcement (the demonstrator)
+    // CLUSTER_SERVICE_AUTH   = 2, // (future) centralized auth/name-reservation
+    // CLUSTER_SERVICE_CHAT   = 3, // (future) centralized chat fan-out
+    // CLUSTER_SERVICE_WARDEN = 4, // (future) centralized Warden signature evaluation
 };
 
 // Reasons carried by CLUSTER_MSG_GROUP_STATE. Kept here so the BG layer can add its

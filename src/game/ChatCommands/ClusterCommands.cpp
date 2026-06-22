@@ -10,6 +10,7 @@
 #include "Player.h"
 #include "World.h"
 #include "ClusterMgr.h"
+#include "ClusterMessage.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Map.h"
@@ -378,5 +379,37 @@ bool ChatHandler::HandleClusterBoundariesCommand(char* args)
                     "Colour change = node boundary; hover a marker for zone/node. Despawn in %us "
                     "(or .debug vis clear).",
                     placed, otherNode, myNode, DebugVis::DespawnSeconds());
+    return true;
+}
+
+bool ChatHandler::HandleClusterAnnounceCommand(char* args)
+{
+    if (!args || !*args)
+    {
+        SendSysMessage("Syntax: .cluster announce <text>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    std::string text = args;
+
+    // Route through the ANNOUNCE service role. RouteAnnounce() decides:
+    //  - cluster off / role unconfigured / owner offline -> local fallback (here & now)
+    //  - we ARE the owner -> local + broadcast result to peers
+    //  - live remote owner -> directed request; owner runs it and fans out the result
+    // Either way the announcement happens; it never silently fails.
+    bool routed = sClusterMgr->RouteAnnounce(text);
+
+    uint32 owner = sClusterMgr->GetServiceOwner(CLUSTER_SERVICE_ANNOUNCE);
+    if (!sClusterMgr->IsEnabled())
+        PSendSysMessage("Cluster announce (local — cluster disabled): %s", text.c_str());
+    else if (routed)
+        PSendSysMessage("Cluster announce routed to ANNOUNCE-service owner node %u.", owner);
+    else if (owner == sClusterMgr->GetNodeId())
+        PSendSysMessage("Cluster announce performed as ANNOUNCE-service owner (node %u) and fanned out cluster-wide.",
+                        owner);
+    else
+        PSendSysMessage("Cluster announce (local fallback — role owner %u unconfigured/offline): %s",
+                        owner, text.c_str());
     return true;
 }
