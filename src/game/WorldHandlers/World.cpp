@@ -1010,6 +1010,15 @@ void World::LoadConfigSettings(bool reload)
     // cluster_bg_queue table; the coordinator forms cross-node matches and converges
     // players to a host node via the existing migration. Off = single-node BG behaviour.
     setConfig(CONFIG_BOOL_CLUSTER_CROSSNODE_BG,     "Cluster.CrossNodeBG", false);
+    // Cluster gateway (Phase 4): resume mode for a transparent migration arrival.
+    // false (default) = loading-screen resume (Phase 3, proven, Blizzard-faithful):
+    // node B sends SMSG_LOGIN_VERIFY_WORLD which drives a same-connection loading
+    // screen / world-enter. true = seamless resume (no loading screen): node B adds
+    // the player to the map and resumes the object/update stream WITHOUT the
+    // world-change packet, so the client keeps the already-loaded map and play
+    // continues uninterrupted. Only affects gateway-fronted migration arrivals;
+    // normal logins are unaffected. Seamless is best-effort — see mangosd.conf.dist.
+    setConfig(CONFIG_BOOL_GATEWAY_SEAMLESS,         "Gateway.SeamlessMigration", false);
 
     // Anti-Cheat debug visualizer (Slice 2). Off by default; spawns temporary
     // colour-coded gameobjects trailing the player for diagnostics only.

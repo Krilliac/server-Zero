@@ -1993,9 +1993,30 @@ Cluster.Chat.TagNode         = 0
 #        does NOT start (the node logs an error) — there is no unauthenticated
 #        mode. Use a long random value.
 #        Default: "" (intake disabled until set)
+#
+#    Gateway.SeamlessMigration
+#        Resume mode for a transparent cluster-gateway migration arrival (when a
+#        player is handed off to this node from another node behind the gateway).
+#        0 (DEFAULT, proven, Blizzard-faithful): LOADING-SCREEN resume. Node B
+#          sends SMSG_LOGIN_VERIFY_WORLD on the (never-reset) client connection,
+#          which drives a brief same-connection loading screen / world-enter, then
+#          adds the player to the map. This is the Phase 3 behaviour.
+#        1: SEAMLESS resume (NO loading screen). Node B adds the player to the map
+#          and sends the in-place resume (object create-self, world states, spells,
+#          nearby objects) but OMITS SMSG_LOGIN_VERIFY_WORLD — so the client, which
+#          still has the map loaded from the source node, continues uninterrupted
+#          with no loading screen.
+#        BEST-EFFORT / EXPERIMENTAL: the seamless path is gated to gateway-fronted
+#          migration arrivals only and never affects a normal login. The packet-level
+#          behaviour (no world-change packet) is mechanically verifiable, but the
+#          on-screen result (truly no visible loading screen, continuous motion)
+#          REQUIRES validation with a real 1.12.1 client — a synthetic client cannot
+#          prove the render. Leave at 0 unless you are testing seamless handoff.
+#        Default: 0 (loading-screen resume)
 Gateway.IntakePort           = 0
 Gateway.IntakeBindIP         = "127.0.0.1"
 Gateway.Secret               = ""
+Gateway.SeamlessMigration    = 0
 
 #    Debug Visualizer (Slice 2) — diagnostic only, no gameplay effect.
 #    When enabled (requires AntiCheat.Enable=1) the server spawns temporary,

@@ -727,23 +727,42 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
     // a resume: the intro cinematic, the login MOTD / guild-MOTD broadcast spam, and the
     // AT_LOGIN_FIRST one-shot hooks. The flag is consumed (cleared) exactly here.
     const bool migrationArriving = IsGatewayMigrationArriving();
+    // Phase 4: resume mode for a migration arrival. Seamless (no loading screen)
+    // is operator-selected via Gateway.SeamlessMigration. It is ONLY reachable on a
+    // gateway-fronted migration arrival; a normal login (migrationArriving==false) is
+    // never seamless, and with the config defaulting false a fronted arrival takes the
+    // proven Phase-3 loading-screen path. So the default is byte-for-byte Phase 3.
+    const bool seamless = migrationArriving && sWorld.getConfig(CONFIG_BOOL_GATEWAY_SEAMLESS);
     if (migrationArriving)
     {
         SetGatewayMigrationArriving(false);
         DEBUG_LOG("Cluster gateway: player guid %u logging in as a migration arrival; "
-                  "suppressing first-login side effects, resuming via SMSG_LOGIN_VERIFY_WORLD.",
-                  pCurrChar->GetGUIDLow());
+                  "suppressing first-login side effects, resuming via %s.",
+                  pCurrChar->GetGUIDLow(),
+                  seamless ? "seamless (no-loading-screen) in-place resume — "
+                             "SMSG_LOGIN_VERIFY_WORLD omitted"
+                           : "SMSG_LOGIN_VERIFY_WORLD (loading screen)");
     }
 
-    WorldPacket data(SMSG_LOGIN_VERIFY_WORLD, 20);
-    data << pCurrChar->GetMapId();
-    data << pCurrChar->GetPositionX();
-    data << pCurrChar->GetPositionY();
-    data << pCurrChar->GetPositionZ();
-    data << pCurrChar->GetOrientation();
-    SendPacket(&data);
+    // SMSG_LOGIN_VERIFY_WORLD is the client's world-enter / loading-screen trigger.
+    // Loading-screen resume (default) and all normal logins send it. Seamless resume
+    // SKIPS it: the client still has the source node's map loaded, so re-anchoring the
+    // player (object create-self below via SendInitialPacketsBefore/AfterAddToMap +
+    // GetMap()->Add) and pushing nearby objects through normal grid visibility is enough
+    // to continue play in place — sending a world-change packet here would force the very
+    // loading screen seamless mode exists to avoid.
+    if (!seamless)
+    {
+        WorldPacket verifyWorld(SMSG_LOGIN_VERIFY_WORLD, 20);
+        verifyWorld << pCurrChar->GetMapId();
+        verifyWorld << pCurrChar->GetPositionX();
+        verifyWorld << pCurrChar->GetPositionY();
+        verifyWorld << pCurrChar->GetPositionZ();
+        verifyWorld << pCurrChar->GetOrientation();
+        SendPacket(&verifyWorld);
+    }
 
-    data.Initialize(SMSG_ACCOUNT_DATA_TIMES, 128);
+    WorldPacket data(SMSG_ACCOUNT_DATA_TIMES, 128);
     for (int i = 0; i < 32; ++i)
     {
         data << uint32(0);
