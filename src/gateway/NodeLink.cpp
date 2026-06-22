@@ -204,10 +204,70 @@ void NodeLink::parseFrames()
 
 void NodeLink::dispatch(uint8 type, const uint8* payload, uint32 len)
 {
+    // Phase 3 migration control frames (node -> gateway). Surface them to the
+    // owning ClientSocket (the orchestrator). GW_MIGRATE_REQUEST arrives from the
+    // SOURCE node; GW_SESSION_READY from the DEST node — both are keyed by clientId.
+    if (type == GW_MIGRATE_REQUEST)
+    {
+        // GW_MIGRATE_REQUEST payload: uint32 clientId, uint32 destNode, uint32 charGuid.
+        if (len < 12)
+        {
+            sLog.outError("NodeLink: truncated GW_MIGRATE_REQUEST (%u bytes)", len);
+            return;
+        }
+
+        ByteBuffer in;
+        in.append(payload, len);
+
+        uint32 clientId = 0;
+        uint32 destNode = 0;
+        uint32 charGuid = 0;
+        in >> clientId;
+        in >> destNode;
+        in >> charGuid;
+
+        if (ClientSocket* sock = sNodeRegistry().FindClient(clientId))
+        {
+            sock->OnMigrateRequest(destNode, charGuid);
+        }
+        else
+        {
+            DEBUG_LOG("NodeLink: GW_MIGRATE_REQUEST for unknown client %u; dropping", clientId);
+        }
+        return;
+    }
+
+    if (type == GW_SESSION_READY)
+    {
+        // GW_SESSION_READY payload: uint32 clientId, uint8 ok.
+        if (len < 5)
+        {
+            sLog.outError("NodeLink: truncated GW_SESSION_READY (%u bytes)", len);
+            return;
+        }
+
+        ByteBuffer in;
+        in.append(payload, len);
+
+        uint32 clientId = 0;
+        uint8  ok = 0;
+        in >> clientId;
+        in >> ok;
+
+        if (ClientSocket* sock = sNodeRegistry().FindClient(clientId))
+        {
+            sock->OnSessionReady(ok != 0);
+        }
+        else
+        {
+            DEBUG_LOG("NodeLink: GW_SESSION_READY for unknown client %u; dropping", clientId);
+        }
+        return;
+    }
+
     if (type != GW_CLIENT_PACKET)
     {
-        // GW_SESSION_* and the reserved migration types carry no client packet
-        // to route here in Phase 1.
+        // Other GW_SESSION_* / reserved types carry no client packet to route here.
         return;
     }
 

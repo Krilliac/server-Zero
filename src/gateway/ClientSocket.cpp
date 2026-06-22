@@ -130,7 +130,13 @@ ClientSocket::ClientSocket(void)
     m_RecvOpcode(0),
     m_OutBufferLock(),
     m_OutBuffer(0),
-    m_OutBufferSize(65536)
+    m_OutBufferSize(65536),
+    m_MigrateState(MIG_NONE),
+    m_MigrateDestNode(0),
+    m_MigrateOldNode(0),
+    m_MigrateCharGuid(0),
+    m_MigrateBuffer(),
+    m_MigrateLock()
 {
     reference_counting_policy().value(ACE_Event_Handler::Reference_Counting_Policy::ENABLED);
 }
@@ -481,10 +487,35 @@ int ClientSocket::handle_input_payload(void)
         }
 
         // Post-auth: subsequent packets arrive with their headers decrypted
-        // (handle_input_header runs DecryptRecv now that m_Crypt is keyed). The
-        // decrypted plaintext packet is tunnelled to the backend node as a
-        // GW_CLIENT_PACKET (clientId, opcode, raw payload). If the node link is
-        // down the forward fails best-effort; we just log it and keep going.
+        // (handle_input_header runs DecryptRecv now that m_Crypt is keyed).
+        //
+        // Migration window (§5 step 3): while this client is MIG_MIGRATING the
+        // decrypted client->server packet is APPENDED to m_MigrateBuffer instead
+        // of being forwarded. This is the buffer/replay window — it stops node A
+        // from double-processing the frozen player and prevents loss; the buffer
+        // is replayed to node B (or flushed back to A on abort) on GW_SESSION_READY.
+        // Otherwise the packet is tunnelled to the backend node as a
+        // GW_CLIENT_PACKET (clientId, opcode, raw payload).
+        {
+            ACE_GUARD_RETURN(LockType, MigGuard, m_MigrateLock, rc);
+
+            if (m_MigrateState == MIG_MIGRATING)
+            {
+                BufferedPacket bp;
+                bp.opcode = (uint16)opcode;
+                if (payloadLen)
+                {
+                    bp.payload.assign(recv.contents(), recv.contents() + payloadLen);
+                }
+                m_MigrateBuffer.push_back(bp);
+                DEBUG_LOG("ClientSocket: buffered opcode 0x%04X from client %u during migration (%u queued)",
+                    opcode, m_ClientId, (uint32)m_MigrateBuffer.size());
+                return rc;
+            }
+        }
+
+        // Normal forward path. If the node link is down the forward fails
+        // best-effort; we just log it and keep going.
         ByteBuffer fwd;
         fwd << uint32(m_ClientId);
         fwd << uint16(opcode);
@@ -714,6 +745,198 @@ void ClientSocket::HandlePlayerLogin(const ByteBuffer& recv)
     }
 
     m_CurrentNodeId = target;
+}
+
+/**
+ * @brief Begin a migration for this client (GW_MIGRATE_REQUEST from node A).
+ *
+ * §5 steps 2-4. Arrives on the NodeLink thread (the SOURCE node asked the
+ * gateway to flip this client to @p destNode). Marks the client MIG_MIGRATING
+ * so the reactor's forward path starts buffering, records the dest/old node and
+ * char guid, then sends GW_SESSION_PREPARE to the destination node so it stages
+ * (loads) the migrating character from the shared DB.
+ *
+ * If the destination node link is unavailable we abort immediately: tell node A
+ * to un-quiesce (GW_MIGRATE_ABORT), flush whatever was buffered back to it, and
+ * return to MIG_NONE — the player stays put.
+ *
+ * @param destNode The node to migrate this client to.
+ * @param charGuid The low 32 bits of the migrating player's guid.
+ */
+void ClientSocket::OnMigrateRequest(uint32 destNode, uint32 charGuid)
+{
+    NodeLink* destLink = sNodeRegistry().Get(destNode);
+
+    {
+        ACE_GUARD(LockType, MigGuard, m_MigrateLock);
+
+        if (m_MigrateState == MIG_MIGRATING)
+        {
+            sLog.outError("ClientSocket: GW_MIGRATE_REQUEST for client %u already migrating (%u->%u); ignoring new request to node %u",
+                m_ClientId, m_MigrateOldNode, m_MigrateDestNode, destNode);
+            return;
+        }
+
+        // No reachable destination: refuse before we start buffering.
+        if (!destLink)
+        {
+            sLog.outError("ClientSocket: GW_MIGRATE_REQUEST for client %u to node %u rejected (dest link unavailable); aborting, player stays on node %u",
+                m_ClientId, destNode, m_CurrentNodeId);
+
+            // Tell the source (current) node to un-quiesce. Nothing was buffered
+            // yet, so there is nothing to flush.
+            if (NodeLink* oldLink = sNodeRegistry().Get(m_CurrentNodeId))
+            {
+                ByteBuffer abortMsg;
+                abortMsg << uint32(m_ClientId);
+                oldLink->SendFrame(GW_MIGRATE_ABORT, abortMsg);
+            }
+            return;
+        }
+
+        // Enter the buffering window. From here, the reactor thread appends
+        // client->server packets to m_MigrateBuffer instead of forwarding.
+        m_MigrateState   = MIG_MIGRATING;
+        m_MigrateDestNode = destNode;
+        m_MigrateOldNode  = m_CurrentNodeId;
+        m_MigrateCharGuid = charGuid;
+        m_MigrateBuffer.clear();
+    }
+
+    // GW_SESSION_PREPARE (gateway -> node B): uint32 clientId, uint32 accountId,
+    // uint32 charGuid, uint8 locale, uint32 security, uint32 destNode.
+    ByteBuffer prep;
+    prep << uint32(m_ClientId);
+    prep << uint32(m_AccountId);
+    prep << uint32(charGuid);
+    prep << uint8(m_Locale);
+    prep << uint32(m_Security);
+    prep << uint32(destNode);
+
+    if (!destLink->SendFrame(GW_SESSION_PREPARE, prep))
+    {
+        // The link dropped between the Get() above and now: treat as abort.
+        sLog.outError("ClientSocket: GW_SESSION_PREPARE for client %u to node %u failed (link down); aborting",
+            m_ClientId, destNode);
+        OnSessionReady(false);
+        return;
+    }
+
+    sLog.outString("gateway: client %u migrating %u->%u, sent GW_SESSION_PREPARE (char %u)",
+        m_ClientId, m_MigrateOldNode, destNode, charGuid);
+}
+
+/**
+ * @brief Complete (or abort) a migration (GW_SESSION_READY from node B).
+ *
+ * §5 steps 5-6. Arrives on the NodeLink thread (the DEST node reports whether
+ * it staged the character).
+ *
+ * On ok: atomically (under m_MigrateLock) switch the forward-target to the dest
+ * node, release the old node, replay the buffered client packets to the new
+ * node, and return to MIG_NONE.
+ *
+ * On !ok: tell the old node to un-quiesce (GW_MIGRATE_ABORT), flush the buffered
+ * packets back to the old node (the player stays there), and return to MIG_NONE.
+ *
+ * Server->client packets are NOT involved here: they keep flowing from EITHER
+ * node straight through DeliverServerPacket; only the client->server target moves.
+ *
+ * @param ok True if node B staged the session; false to abort and stay put.
+ */
+void ClientSocket::OnSessionReady(bool ok)
+{
+    ACE_GUARD(LockType, MigGuard, m_MigrateLock);
+
+    if (m_MigrateState != MIG_MIGRATING)
+    {
+        sLog.outError("ClientSocket: GW_SESSION_READY(ok=%u) for client %u while not migrating; ignoring",
+            ok ? 1 : 0, m_ClientId);
+        return;
+    }
+
+    const uint32 oldNode = m_MigrateOldNode;
+    const uint32 destNode = m_MigrateDestNode;
+
+    if (ok)
+    {
+        // Atomic switch: the forward-target becomes node B. m_CurrentNodeId is
+        // the single source of truth for routing (used by the reactor thread and
+        // handle_close); we hold m_MigrateLock around the switch + replay so no
+        // client packet can slip onto the wrong node.
+        m_CurrentNodeId = destNode;
+
+        // Release the (now inert, already-saved) session on node A.
+        if (NodeLink* oldLink = sNodeRegistry().Get(oldNode))
+        {
+            ByteBuffer releaseMsg;
+            releaseMsg << uint32(m_ClientId);
+            oldLink->SendFrame(GW_SESSION_RELEASE, releaseMsg);
+        }
+
+        // Replay the buffered client->server packets, in FIFO order, to node B.
+        NodeLink* destLink = sNodeRegistry().Get(destNode);
+        const uint32 replayed = (uint32)m_MigrateBuffer.size();
+        while (!m_MigrateBuffer.empty())
+        {
+            BufferedPacket& bp = m_MigrateBuffer.front();
+            ByteBuffer fwd;
+            fwd << uint32(m_ClientId);
+            fwd << uint16(bp.opcode);
+            if (!bp.payload.empty())
+            {
+                fwd.append(&bp.payload[0], bp.payload.size());
+            }
+            if (!destLink || !destLink->SendFrame(GW_CLIENT_PACKET, fwd))
+            {
+                DEBUG_LOG("ClientSocket: replay drop opcode 0x%04X from client %u: node %u link down",
+                    bp.opcode, m_ClientId, destNode);
+            }
+            m_MigrateBuffer.pop_front();
+        }
+
+        m_MigrateState = MIG_NONE;
+
+        sLog.outString("gateway: client %u migrated %u->%u, replayed %u buffered packet(s)",
+            m_ClientId, oldNode, destNode, replayed);
+    }
+    else
+    {
+        // Abort: node B failed to stage. Tell node A to un-quiesce, then flush the
+        // buffered packets back to A (forward, don't drop — the player stays there).
+        NodeLink* oldLink = sNodeRegistry().Get(oldNode);
+
+        if (oldLink)
+        {
+            ByteBuffer abortMsg;
+            abortMsg << uint32(m_ClientId);
+            oldLink->SendFrame(GW_MIGRATE_ABORT, abortMsg);
+        }
+
+        const uint32 flushed = (uint32)m_MigrateBuffer.size();
+        while (!m_MigrateBuffer.empty())
+        {
+            BufferedPacket& bp = m_MigrateBuffer.front();
+            ByteBuffer fwd;
+            fwd << uint32(m_ClientId);
+            fwd << uint16(bp.opcode);
+            if (!bp.payload.empty())
+            {
+                fwd.append(&bp.payload[0], bp.payload.size());
+            }
+            if (!oldLink || !oldLink->SendFrame(GW_CLIENT_PACKET, fwd))
+            {
+                DEBUG_LOG("ClientSocket: abort-flush drop opcode 0x%04X from client %u: node %u link down",
+                    bp.opcode, m_ClientId, oldNode);
+            }
+            m_MigrateBuffer.pop_front();
+        }
+
+        m_MigrateState = MIG_NONE;
+
+        sLog.outString("gateway: migration aborted, client %u stays on node %u (flushed %u buffered packet(s))",
+            m_ClientId, oldNode, flushed);
+    }
 }
 
 /**

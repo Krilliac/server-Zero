@@ -56,7 +56,9 @@
 #include "ByteBuffer.h"
 
 #include <atomic>
+#include <deque>
 #include <string>
+#include <vector>
 
 class ClientSocket;
 
@@ -100,6 +102,17 @@ class ClientSocket : protected ClientHandler
         /// Gateway-assigned, process-unique id used to key this connection in
         /// the NodeLink's clientId -> ClientSocket map.
         uint32 GetClientId() const { return m_ClientId; }
+
+        /// Migration control frames surfaced from the NodeLink thread (via the
+        /// registry's clientId -> ClientSocket lookup). The gateway is the
+        /// orchestrator of the §5 migration handshake.
+        ///
+        /// OnMigrateRequest arrives from the SOURCE node (GW_MIGRATE_REQUEST):
+        /// start buffering this client's packets and prepare the dest node.
+        /// OnSessionReady arrives from the DEST node (GW_SESSION_READY): commit
+        /// the switch + replay, or abort and keep the player on the old node.
+        void OnMigrateRequest(uint32 destNode, uint32 charGuid);
+        void OnSessionReady(bool ok);
 
     protected:
         /// Things called by the ACE framework.
@@ -198,6 +211,49 @@ class ClientSocket : protected ClientHandler
 
         /// Size of m_OutBuffer.
         size_t m_OutBufferSize;
+
+        // --- Migration orchestration (Phase 3 Task 2) -----------------------
+        //
+        // The gateway is the migration orchestrator. While a client is
+        // MIG_MIGRATING, client->server packets are appended to m_MigrateBuffer
+        // instead of being forwarded; on GW_SESSION_READY the forward-target is
+        // switched atomically and the buffer is replayed (FIFO) to the new node
+        // (or flushed back to the old node on abort).
+
+        /// Per-client migration phase. NONE = normal forward; MIGRATING = the
+        /// buffer/prepare/switch window between GW_MIGRATE_REQUEST and
+        /// GW_SESSION_READY.
+        enum MigrateState { MIG_NONE = 0, MIG_MIGRATING = 1 };
+
+        /// A single buffered client->server packet held during the window.
+        struct BufferedPacket
+        {
+            uint16 opcode;
+            std::vector<uint8> payload;
+        };
+
+        /// Current migration phase (read by the reactor thread on the forward
+        /// path; written by the NodeLink thread). Guarded by m_MigrateLock.
+        MigrateState m_MigrateState;
+
+        /// Destination node the gateway is migrating this client TO.
+        uint32 m_MigrateDestNode;
+
+        /// Node that fronted this client at migration start (the release/abort
+        /// target).
+        uint32 m_MigrateOldNode;
+
+        /// Character guid being migrated (forwarded in GW_SESSION_PREPARE).
+        uint32 m_MigrateCharGuid;
+
+        /// FIFO of client->server packets captured during the migration window.
+        std::deque<BufferedPacket> m_MigrateBuffer;
+
+        /// Guards m_MigrateState + the migration fields + m_MigrateBuffer. Held
+        /// briefly on the reactor thread (buffer-or-forward decision) and on the
+        /// NodeLink thread (request/ready transitions). Distinct from
+        /// m_OutBufferLock so server->client delivery is never blocked by it.
+        LockType m_MigrateLock;
 };
 
 #endif /* GATEWAY_H_CLIENTSOCKET */
