@@ -24,6 +24,7 @@
 
 ClusterMgr::ClusterMgr()
     : m_enabled(false), m_migrationEnabled(false), m_autoMigrate(false),
+      m_autoFailover(false),
       m_visualDebug(false), m_chatTag(false), m_visualIntervalMs(6000),
       m_svcAnnounceNode(0),
       m_nodeId(1), m_port(0), m_peerPort(0), m_capacity(0),
@@ -36,6 +37,9 @@ void ClusterMgr::LoadConfig()
     m_enabled          = sWorld.getConfig(CONFIG_BOOL_CLUSTER_ENABLE);
     m_migrationEnabled = sWorld.getConfig(CONFIG_BOOL_CLUSTER_MIGRATION);
     m_autoMigrate      = sWorld.getConfig(CONFIG_BOOL_CLUSTER_AUTOMIGRATE);
+    // Auto-failover gate. Read straight from sConfig (no World.h enum needed); OFF by
+    // default so a cluster never auto-mutates assignments until the operator opts in.
+    m_autoFailover     = sConfig.GetBoolDefault("Cluster.AutoFailover", false);
     m_visualDebug      = sWorld.getConfig(CONFIG_BOOL_CLUSTER_VISUAL);
     m_visualIntervalMs = sWorld.getConfig(CONFIG_UINT32_CLUSTER_VISUAL_INTERVAL);
     m_chatTag          = sWorld.getConfig(CONFIG_BOOL_CLUSTER_CHATTAG);
@@ -211,6 +215,102 @@ void ClusterMgr::MarkStaleOffline()
         "UPDATE `cluster_nodes` SET `status`='offline',`player_count`=0 "
         "WHERE `status`<>'offline' AND `last_heartbeat` < (UNIX_TIMESTAMP() - %u)",
         grace);
+
+    // Coordinator-driven auto-failover. We recompute the coordinator AFTER the flip
+    // above, so a just-died coordinator is already excluded and the next-lowest
+    // survivor takes over this same tick. The sweep is idempotent, so running it
+    // every tick on the coordinator is cheap (no-op when nothing is orphaned).
+    if (m_autoFailover && IsCoordinator())
+        RunFailoverSweep();
+}
+
+uint32 ClusterMgr::GetCoordinatorNode()
+{
+    // Deterministic, stateless election: the lowest node_id currently online owns
+    // failover. Recomputed each call, so coordinator death heals on the next tick.
+    QueryResult* result = LoginDatabase.Query(
+        "SELECT MIN(`node_id`) FROM `cluster_nodes` WHERE `status`='online'");
+    if (!result)
+        return 0;
+    uint32 coord = (*result)[0].GetUInt32();
+    delete result;
+    return coord;
+}
+
+void ClusterMgr::GetOnlineSurvivors(std::vector<uint32>& out)
+{
+    out.clear();
+    QueryResult* result = LoginDatabase.Query(
+        "SELECT `node_id` FROM `cluster_nodes` WHERE `status`='online' ORDER BY `node_id` ASC");
+    if (result)
+    {
+        do { out.push_back((*result)[0].GetUInt32()); } while (result->NextRow());
+        delete result;
+    }
+}
+
+void ClusterMgr::RunFailoverSweep()
+{
+    // Coordinator-only, gated. Reassign EVERY zone/affinity owned by a node that is
+    // not currently online to a survivor — independent of WHEN it went down, so a
+    // coordinator that itself dies mid-heal is finished by the next coordinator's
+    // sweep (genuinely self-healing). Idempotent: with nothing orphaned this is a
+    // couple of cheap SELECTs that return no rows.
+    if (!m_enabled || !m_autoFailover)
+        return;
+
+    std::vector<uint32> survivors;
+    GetOnlineSurvivors(survivors);
+    if (survivors.empty())
+        return; // can't happen on the world thread (we are online), but be safe
+
+    // Comma-separated survivor id list for the NOT IN guards (node count is tiny,
+    // <=255). "owned by a non-survivor" == owned by an offline/unknown node.
+    std::string inList;
+    for (size_t i = 0; i < survivors.size(); ++i)
+        inList += (i ? "," : "") + std::to_string(survivors[i]);
+
+    // 1) Zones owned by a dead node -> spread round-robin across survivors so load
+    //    isn't piled onto one node. Each UPDATE is guarded by the old owner id, so
+    //    it is a compare-and-set and a repeat sweep is a no-op.
+    QueryResult* zres = LoginDatabase.PQuery(
+        "SELECT `zone_id`,`node_id` FROM `cluster_zone_assignment` "
+        "WHERE `node_id`<>0 AND `node_id` NOT IN (%s)", inList.c_str());
+    uint32 zonesMoved = 0, idx = 0;
+    if (zres)
+    {
+        do
+        {
+            uint32 zoneId  = (*zres)[0].GetUInt32();
+            uint32 oldNode = (*zres)[1].GetUInt32();
+            uint32 target  = survivors[idx % survivors.size()];
+            ++idx;
+            LoginDatabase.PExecute(
+                "UPDATE `cluster_zone_assignment` SET `node_id`=%u "
+                "WHERE `zone_id`=%u AND `node_id`=%u", target, zoneId, oldNode);
+            ++zonesMoved;
+        } while (zres->NextRow());
+        delete zres;
+    }
+
+    // 2) Character affinities pinned to a dead node -> 0 (= any node), so the login
+    //    affinity check stops refusing them and the router lands them on a survivor.
+    //    Clear (not re-pin) so we never pin onto a node that may also be down/full.
+    //    cluster_character_node is in the CHARACTER db and cluster_nodes in LOGIN, so
+    //    we cannot JOIN — guard by the same survivor id list instead. Idempotent.
+    CharacterDatabase.PExecute(
+        "UPDATE `cluster_character_node` SET `node_id`=0 "
+        "WHERE `node_id`<>0 AND `node_id` NOT IN (%s)", inList.c_str());
+
+    if (zonesMoved)
+    {
+        LoadZoneMap(); // route newly-claimed zones immediately on this (coordinator) node
+        sLog.outString("Cluster: auto-failover swept %u orphaned zone(s) onto %u survivor(s) "
+                       "and cleared affinities of players pinned to a downed node.",
+                       zonesMoved, (uint32)survivors.size());
+        sWorld.SendServerMessage(SERVER_MSG_CUSTOM,
+            "Cluster: a node went down; surviving nodes auto-healed zone/character assignments.");
+    }
 }
 
 void ClusterMgr::RegisterPlayer(uint32 guidLow)

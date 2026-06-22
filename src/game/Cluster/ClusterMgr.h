@@ -162,6 +162,16 @@ class ClusterMgr
         void Heartbeat();        // refresh last_heartbeat + player_count
         void MarkStaleOffline(); // flip peers that missed heartbeats to 'offline'
 
+        // --- Automatic failover (coordinator-driven; gated by Cluster.AutoFailover) ---
+        // The coordinator = the lowest node_id currently online; only it heals, to
+        // avoid races. Each tick it sweeps EVERY assignment owned by a non-online node
+        // and reassigns it to a survivor, so a coordinator that dies mid-heal is
+        // finished by the next coordinator (self-healing, idempotent).
+        uint32 GetCoordinatorNode();                 // lowest online node_id (0 if none)
+        bool   IsCoordinator() { return GetCoordinatorNode() == m_nodeId; }
+        void   GetOnlineSurvivors(std::vector<uint32>& out); // online node ids, ascending
+        void   RunFailoverSweep();                   // reassign offline-owned zones/affinities
+
         void RefreshPeers();     // world thread: rebuild m_peers from cluster_nodes
         void DrainInbound();     // world thread: process queued inbound frames
         void LoadServiceConfig(); // Phase 8: read Cluster.Service.* role owners
@@ -171,6 +181,7 @@ class ClusterMgr
         bool        m_enabled;
         bool        m_migrationEnabled;
         bool        m_autoMigrate;
+        bool        m_autoFailover; // Cluster.AutoFailover: heal cluster when a peer dies
         bool        m_visualDebug;
         bool        m_chatTag;
         uint32      m_visualIntervalMs;
