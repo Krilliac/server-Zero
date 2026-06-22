@@ -264,6 +264,9 @@ ChatCommand* ChatHandler::getCommandTable()
         { "boundaries",     SEC_GAMEMASTER,     true,  &ChatHandler::HandleClusterBoundariesCommand,        "", NULL },
         { "chattag",        SEC_GAMEMASTER,     true,  &ChatHandler::HandleClusterChatTagCommand,           "", NULL },
         { "announce",       SEC_GAMEMASTER,     true,  &ChatHandler::HandleClusterAnnounceCommand,          "", NULL },
+        { "simwhisper",     SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterSimWhisperCommand,        "", NULL },
+        { "simguild",       SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterSimGuildCommand,          "", NULL },
+        { "simgroup",       SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleClusterSimGroupCommand,          "", NULL },
         { NULL,             0,                  false, NULL,                                               "", NULL }
     };
 

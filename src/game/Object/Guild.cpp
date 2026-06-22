@@ -833,6 +833,7 @@ void Guild::DeliverRelayedChat(uint32 msgType, uint32 lang, ObjectGuid fromGuid,
     ChatHandler::BuildChatPacket(data, ChatMsg(msgType), msg.c_str(), Language(lang),
         ChatTagFlags(chatTag), fromGuid, fromName.c_str());
 
+    uint32 delivered = 0;
     for (MemberList::const_iterator itr = members.begin(); itr != members.end(); ++itr)
     {
         Player* pl = sObjectAccessor.FindPlayer(ObjectGuid(HIGHGUID_PLAYER, itr->first));
@@ -842,8 +843,12 @@ void Guild::DeliverRelayedChat(uint32 msgType, uint32 lang, ObjectGuid fromGuid,
             !pl->GetSocial()->HasIgnore(fromGuid))
         {
             pl->GetSession()->SendPacket(&data);
+            ++delivered;
         }
     }
+
+    sLog.outString("Cluster: guild %u received relayed %s chat from %s — delivered to %u local member(s).",
+                   GetId(), officer ? "officer" : "guild", fromName.c_str(), delivered);
 }
 
 /**

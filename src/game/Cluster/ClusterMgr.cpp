@@ -691,7 +691,12 @@ void ClusterMgr::DrainInbound()
                                 ChatHandler::BuildChatPacket(data, ChatMsg(chatType), text.c_str(),
                                     Language(lang), ChatTagFlags(fromTag), ObjectGuid(fromGuid), fromName.c_str());
                                 tgt->GetSession()->SendPacket(&data);
+                                sLog.outString("Cluster: relayed whisper from %s delivered to %s on this node.",
+                                               fromName.c_str(), toName.c_str());
                             }
+                            else
+                                sLog.outString("Cluster: relayed whisper for %s — target not on this node.",
+                                               toName.c_str());
                             break;
                         }
                     }

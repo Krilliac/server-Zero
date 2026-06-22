@@ -1783,6 +1783,9 @@ void Group::DeliverRelayedChat(uint32 chatType, uint32 lang, ObjectGuid fromGuid
     // For plain party chat inside a raid the origin scoped to the sender's sub-group;
     // mirror that here. RAID/RAID_LEADER/RAID_WARNING pass subGroup = -1 (whole group).
     BroadcastPacket(&data, false, subGroup);
+
+    sLog.outString("Cluster: group %u received relayed chat (type %u) from %s — delivered to local members.",
+                   GetId(), chatType, fromName.c_str());
 }
 
 void Group::OnRelayedStateChange(uint8 /*reason*/)

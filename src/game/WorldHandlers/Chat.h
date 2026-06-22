@@ -264,6 +264,9 @@ class ChatHandler
         bool HandleClusterBoundariesCommand(char* args);
         bool HandleClusterChatTagCommand(char* args);
         bool HandleClusterAnnounceCommand(char* args);
+        bool HandleClusterSimWhisperCommand(char* args);
+        bool HandleClusterSimGuildCommand(char* args);
+        bool HandleClusterSimGroupCommand(char* args);
 
         // Anti-Cheat framework commands
         bool HandleAntiCheatStatusCommand(char* args);

@@ -413,3 +413,73 @@ bool ChatHandler::HandleClusterAnnounceCommand(char* args)
                         owner, text.c_str());
     return true;
 }
+
+// --- Cross-node relay test commands (console-runnable; for end-to-end testing) ---
+// Each fires the real relay sender with a synthetic sender identity, so the peer
+// nodes run their genuine receive/deliver paths. Watch the PEER node's log for the
+// "Cluster: ... received relayed ..." line to confirm transport + delivery.
+
+bool ChatHandler::HandleClusterSimWhisperCommand(char* args)
+{
+    if (!sClusterMgr->IsEnabled())
+    {
+        SendSysMessage("Cluster is disabled (Cluster.Enable=0); nothing to relay.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    char* to   = strtok(args, " ");
+    char* text = strtok(NULL, "");
+    if (!to || !text)
+    {
+        SendSysMessage("Syntax: .cluster simwhisper <toName> <text>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    sClusterMgr->SendChatRelay(CHAT_MSG_WHISPER, LANG_UNIVERSAL, 0, 0, "ClusterTest", to, text);
+    PSendSysMessage("Broadcast a cross-node WHISPER relay to '%s'. Check the target node's log.", to);
+    return true;
+}
+
+bool ChatHandler::HandleClusterSimGuildCommand(char* args)
+{
+    if (!sClusterMgr->IsEnabled())
+    {
+        SendSysMessage("Cluster is disabled (Cluster.Enable=0); nothing to relay.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    char* idStr = strtok(args, " ");
+    char* text  = strtok(NULL, "");
+    if (!idStr || !text)
+    {
+        SendSysMessage("Syntax: .cluster simguild <guildId> <text>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    uint32 guildId = (uint32)atoi(idStr);
+    sClusterMgr->SendChatRelay(CHAT_MSG_GUILD, LANG_UNIVERSAL, 0, 0, "ClusterTest", "", text, guildId, 0);
+    PSendSysMessage("Broadcast a cross-node GUILD relay for guild %u. Check the peer node's log.", guildId);
+    return true;
+}
+
+bool ChatHandler::HandleClusterSimGroupCommand(char* args)
+{
+    if (!sClusterMgr->IsEnabled())
+    {
+        SendSysMessage("Cluster is disabled (Cluster.Enable=0); nothing to relay.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    char* idStr = strtok(args, " ");
+    char* text  = strtok(NULL, "");
+    if (!idStr || !text)
+    {
+        SendSysMessage("Syntax: .cluster simgroup <groupId> <text>");
+        SetSentErrorMessage(true);
+        return false;
+    }
+    uint32 groupId = (uint32)atoi(idStr);
+    sClusterMgr->SendGroupChatRelay(CHAT_MSG_PARTY, LANG_UNIVERSAL, groupId, 0, 0, "ClusterTest", text, -1);
+    PSendSysMessage("Broadcast a cross-node PARTY relay for group %u. Check the peer node's log.", groupId);
+    return true;
+}

@@ -742,6 +742,9 @@ void Channel::DeliverRelayedChat(uint32 lang, ObjectGuid fromGuid, uint32 chatTa
     ChatHandler::BuildChatPacket(data, CHAT_MSG_CHANNEL, text.c_str(), Language(lang),
         ChatTagFlags(chatTag), fromGuid, fromName.c_str(), ObjectGuid(), "", m_name.c_str(), 0);
     SendToAll(&data, fromGuid);
+
+    sLog.outString("Cluster: channel '%s' received relayed chat from %s — delivered to local members.",
+                   m_name.c_str(), fromName.c_str());
 }
 
 /**
