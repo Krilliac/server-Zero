@@ -45,7 +45,10 @@
 #include "SystemConfig.h"
 #include "Util.h"
 
+#include "ClientSocketMgr.h"
+
 #include <ace/Get_Opt.h>
+#include <ace/INET_Addr.h>
 
 #include <cstdio>
 #include <string>
@@ -178,7 +181,18 @@ extern int main(int argc, char** argv)
     ///- Catch termination signals
     HookSignals();
 
+    ///- Start accepting inbound game-client connections
     uint16 gatewayPort = sConfig.GetIntDefault("GatewayPort", DEFAULT_WORLDSERVER_PORT);
+    ACE_INET_Addr bind_addr(gatewayPort, "0.0.0.0");
+    if (sClientSocketMgr->StartNetwork(bind_addr) == -1)
+    {
+        sLog.outError("Failed to start client network on port %u", gatewayPort);
+        UnhookSignals();
+        StopDB();
+        Log::WaitBeforeContinueIfNeed();
+        return 1;
+    }
+
     sLog.outString();
     sLog.outString("==============================================");
     sLog.outString(" Gateway online (GatewayPort %u)", gatewayPort);
@@ -201,6 +215,7 @@ extern int main(int argc, char** argv)
     }
 
     ///- Clean shutdown
+    sClientSocketMgr->StopNetwork();
     UnhookSignals();
     StopDB();
 
