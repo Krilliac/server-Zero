@@ -63,6 +63,10 @@ CMSG_AUTH_SESSION = 0x1ED
 SMSG_AUTH_RESPONSE = 0x1EE
 AUTH_OK = 0x0C
 
+# Round-trip opcodes (session-handled, so they traverse the full tunnel).
+CMSG_CHAR_ENUM = 0x37
+SMSG_CHAR_ENUM = 0x3B
+
 
 # --- AuthCrypt port (classic: key = raw 40-byte K) -------------------------
 
@@ -78,6 +82,27 @@ class HeaderCrypt:
         self.key = key
         self.recv_i = 0
         self.recv_j = 0
+        # Send counters are an independent stream (mirror the server's recv
+        # counters): the client's EncryptSend is the inverse of the server's
+        # DecryptRecv, so the two stay in lockstep packet-for-packet.
+        self.send_i = 0
+        self.send_j = 0
+
+    def encrypt_send(self, data: bytes) -> bytes:
+        # Inverse of the server's DecryptRecv:
+        #   server: p = (cipher - prev_j) ^ key[i]; prev_j = cipher
+        #   client: cipher = ((p ^ key[i]) + prev_j) & 0xFF; prev_j = cipher
+        # This is identical in form to the server's EncryptSend, but the server
+        # decrypts the FIRST 6 bytes of each client header (CRYPTED_RECV_LEN),
+        # so we encrypt exactly the 6-byte client header here.
+        out = bytearray(len(data))
+        for t in range(len(data)):
+            self.send_i %= len(self.key)
+            x = ((data[t] ^ self.key[self.send_i]) + self.send_j) & 0xFF
+            self.send_i += 1
+            self.send_j = x
+            out[t] = x
+        return bytes(out)
 
     def decrypt_recv(self, data: bytes) -> bytes:
         # Inverse of the server's EncryptSend:
@@ -185,6 +210,9 @@ def main():
     crypt = HeaderCrypt(K_BYTES)
     enc_hdr = recv_exact(sock, 4)
     dec_hdr = crypt.decrypt_recv(enc_hdr)
+    if os.environ.get("GW_DEBUG"):
+        print("DEBUG: authresp hdr enc=%s dec=%s recv_i=%d recv_j=%d"
+              % (enc_hdr.hex(), dec_hdr.hex(), crypt.recv_i, crypt.recv_j))
     size = struct.unpack(">H", dec_hdr[0:2])[0]
     opcode = struct.unpack("<H", dec_hdr[2:4])[0]
     if opcode != SMSG_AUTH_RESPONSE:
@@ -198,9 +226,67 @@ def main():
               % (AUTH_OK, got))
         return 1
 
-    sock.close()
     print("AUTH PASS")
-    return 0
+
+    # --- 5. Round-trip a session-handled opcode through the tunnel ---------
+    # CMSG_CHAR_ENUM is handled by WorldSession::HandleCharEnumOpcode (an async
+    # DB query), so it travels the FULL path: gateway -> node session ->
+    # opcode handler -> SMSG_CHAR_ENUM -> gateway -> us. CMSG_PING would not
+    # (it's answered socket-side). An empty payload is correct for char-enum.
+    #
+    # Post-auth, the client header is the 6-byte ClientPktHeader the gateway
+    # decrypts (size BE 2 bytes + opcode 4 bytes LE). We encrypt those 6 bytes
+    # with the same keyed crypt; send counters start fresh (the auth packet's
+    # header went out in plaintext, so this is the first encrypted client
+    # header and the server's recv counters are likewise at zero).
+    enum_payload = b""  # CMSG_CHAR_ENUM has no body
+    enum_cmd_len = 4 + len(enum_payload)  # size counts the 4-byte opcode field
+    enum_hdr_plain = (struct.pack(">H", enum_cmd_len)
+                      + struct.pack("<I", CMSG_CHAR_ENUM))
+    enum_hdr_enc = crypt.encrypt_send(enum_hdr_plain)
+    if os.environ.get("GW_DEBUG"):
+        print("DEBUG: enum hdr plain=%s enc=%s"
+              % (enum_hdr_plain.hex(), enum_hdr_enc.hex()))
+    sock.sendall(enum_hdr_enc + enum_payload)
+
+    # Read server packets until SMSG_CHAR_ENUM arrives, skipping the node's
+    # world-admission SMSG_AUTH_RESPONSE. When the gateway opens the backend
+    # session, World::AddSession sends a SECOND SMSG_AUTH_RESPONSE (the
+    # AUTH_OK + billing world-admission packet, body=10 bytes) back through the
+    # tunnel ahead of our char-enum reply. That's expected and is consumed
+    # here. The node also runs an async character DB query, so the char-enum
+    # reply is delayed; loop with a recv timeout to absorb both.
+    sock.settimeout(5)
+    deadline = __import__("time").time() + 10
+    while True:
+        if __import__("time").time() > deadline:
+            print("ROUNDTRIP FAIL: no SMSG_CHAR_ENUM within deadline")
+            return 1
+        try:
+            enc_reply_hdr = recv_exact(sock, 4)
+        except (socket.timeout, RuntimeError) as e:
+            print("ROUNDTRIP FAIL: no server reply (%s)" % e)
+            return 1
+
+        dec_reply_hdr = crypt.decrypt_recv(enc_reply_hdr)
+        rsize = struct.unpack(">H", dec_reply_hdr[0:2])[0]
+        ropcode = struct.unpack("<H", dec_reply_hdr[2:4])[0]
+        rbody = recv_exact(sock, rsize - 2) if rsize >= 2 else b""
+        if os.environ.get("GW_DEBUG"):
+            print("DEBUG: reply hdr enc=%s dec=%s opcode=0x%X size=%d"
+                  % (enc_reply_hdr.hex(), dec_reply_hdr.hex(), ropcode, rsize))
+
+        if ropcode == SMSG_AUTH_RESPONSE:
+            # World-admission packet from the node; expected, keep reading.
+            continue
+        if ropcode == SMSG_CHAR_ENUM:
+            char_count = rbody[0] if rbody else 0
+            sock.close()
+            print("ROUNDTRIP PASS (chars=%d)" % char_count)
+            return 0
+        print("ROUNDTRIP FAIL: unexpected opcode 0x%X (size=%d) before "
+              "SMSG_CHAR_ENUM" % (ropcode, rsize))
+        return 1
 
 
 if __name__ == "__main__":
