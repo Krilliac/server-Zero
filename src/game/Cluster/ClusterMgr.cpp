@@ -727,6 +727,12 @@ void ClusterMgr::DrainInbound()
                     if (Group* group = sObjectMgr.GetGroupById(groupId))
                         group->DeliverRelayedChat(chatType, lang, ObjectGuid(fromGuid),
                             fromTag, fromName, text, subGroup);
+                    else
+                        // Lazy fallback: the group object isn't loaded on this node
+                        // (it was formed on another node), so deliver to local members
+                        // resolved from the shared group_member table instead of dropping.
+                        DeliverGroupChatFallback(groupId, chatType, lang, fromGuid,
+                            fromTag, fromName, text, subGroup);
                 }
                 break;
             }
@@ -953,6 +959,45 @@ void ClusterMgr::RunBgConvergence()
         plr->MigrateToNode(host);
     } while (res->NextRow());
     delete res;
+}
+
+void ClusterMgr::DeliverGroupChatFallback(uint32 groupId, uint8 chatType, uint32 lang,
+                                          uint64 fromGuid, uint8 fromTag,
+                                          std::string const& fromName, std::string const& text,
+                                          int32 subGroup)
+{
+    // The Group object isn't loaded on this node (formed on another node), so
+    // Group::DeliverRelayedChat can't run. Resolve members from the shared
+    // group_member table and deliver to the ones online HERE. subGroup >= 0 scopes
+    // plain party chat within a raid, mirroring BroadcastPacket's sub-group filter.
+    QueryResult* res = CharacterDatabase.PQuery(
+        "SELECT `memberGuid`,`subgroup` FROM `group_member` WHERE `groupId`=%u", groupId);
+    if (!res)
+        return;
+
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, ChatMsg(chatType), text.c_str(), Language(lang),
+        ChatTagFlags(fromTag), ObjectGuid(fromGuid), fromName.c_str());
+
+    uint32 delivered = 0;
+    do
+    {
+        uint32 memberGuid = (*res)[0].GetUInt32();
+        int32  memberSub  = (int32)(*res)[1].GetUInt32();
+        if (subGroup >= 0 && memberSub != subGroup)
+            continue;
+        Player* pl = sObjectAccessor.FindPlayer(ObjectGuid(HIGHGUID_PLAYER, memberGuid));
+        if (pl && pl->IsInWorld() && pl->GetSession())
+        {
+            pl->GetSession()->SendPacket(&data);
+            ++delivered;
+        }
+    } while (res->NextRow());
+    delete res;
+
+    if (delivered)
+        sLog.outString("Cluster: relayed group %u chat delivered to %u local member(s) via "
+                       "DB fallback (group object not loaded here).", groupId, delivered);
 }
 
 void ClusterMgr::Update(uint32 /*diff*/)

@@ -194,6 +194,14 @@ class ClusterMgr
         // is a different node to the host (reuses Player::MigrateToNode).
         void   RunBgConvergence();
 
+        // Phase 7 lazy fallback: when a relayed group chat arrives but this node has
+        // not loaded the Group object (group formed on another node), deliver directly
+        // to local members resolved from the shared group_member table.
+        void   DeliverGroupChatFallback(uint32 groupId, uint8 chatType, uint32 lang,
+                                        uint64 fromGuid, uint8 fromTag,
+                                        std::string const& fromName, std::string const& text,
+                                        int32 subGroup);
+
         void RefreshPeers();     // world thread: rebuild m_peers from cluster_nodes
         void DrainInbound();     // world thread: process queued inbound frames
         void LoadServiceConfig(); // Phase 8: read Cluster.Service.* role owners
