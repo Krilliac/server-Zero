@@ -36,6 +36,10 @@
 #include "AuctionHouseMgr.h"
 #include "Item.h"
 
+#include <mutex>
+#include <string>
+#include <vector>
+
 struct ItemPrototype;
 struct AuctionEntry;
 struct AuctionHouseEntry;
@@ -337,6 +341,16 @@ class WorldSession
         void KickPlayer();
 
         void QueuePacket(WorldPacket* new_packet);
+
+        // --- Cluster gateway anti-cheat channel (Phase 1) -------------------
+        // Enqueue a gateway-detected anti-cheat violation for this session. Safe
+        // to call from the gateway-intake REACTOR thread (it only locks + pushes
+        // onto a bounded queue). The event is drained on the WORLD thread in
+        // Update(), where AntiCheatMgr::RecordGatewayViolation (which touches the
+        // Player + DB and may kick) runs safely. acType/severity are the raw
+        // numbers carried on the wire (GW_AC_EVENT); the world-thread drain maps
+        // acType -> AntiCheatViolationType and severity -> score weight.
+        void QueueGatewayAcEvent(uint8 acType, uint8 severity, std::string const& detail);
 
         bool Update(PacketFilter& updater);
 
@@ -945,6 +959,22 @@ class WorldSession
         bool   m_gatewayMigrating;          // source-node quiesce (Phase 3 migration)
         bool   m_gatewayMigrationArriving;  // dest-node: created by GW_SESSION_PREPARE
         ACE_Based::LockedQueue<WorldPacket*, ACE_Thread_Mutex> _recvQueue;
+
+        // --- Cluster gateway anti-cheat channel (Phase 1) -------------------
+        // Cross-thread hand-off for gateway-detected violations. Pushed on the
+        // gateway-intake reactor thread (QueueGatewayAcEvent), drained on the
+        // world thread in Update(). A plain std::mutex-guarded vector mirrors the
+        // QueuePacket marshal pattern (the existing recv queue) without pulling
+        // game-thread-only objects into reactor code. Bounded so a flood cannot
+        // grow it without limit.
+        struct GatewayAcEvent
+        {
+            uint8       type;
+            uint8       severity;
+            std::string detail;
+        };
+        std::vector<GatewayAcEvent> m_gatewayAcEvents;   // guarded by m_gatewayAcLock
+        std::mutex                  m_gatewayAcLock;
 };
 #endif
 /// @}

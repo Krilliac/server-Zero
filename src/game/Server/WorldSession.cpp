@@ -351,6 +351,30 @@ void WorldSession::QueuePacket(WorldPacket* new_packet)
     _recvQueue.add(new_packet);
 }
 
+/// Cluster gateway anti-cheat channel (Phase 1): enqueue a gateway-detected
+/// violation for the world thread to score. Called on the gateway-intake reactor
+/// thread, so it ONLY locks and pushes — it never touches the Player/DB/AC mgr.
+/// The queue is bounded: beyond a small cap a flood is dropped (with a DEBUG_LOG)
+/// so a misbehaving/abusive client can't grow it without limit.
+void WorldSession::QueueGatewayAcEvent(uint8 acType, uint8 severity, std::string const& detail)
+{
+    static const size_t MAX_PENDING_AC_EVENTS = 64;
+
+    std::lock_guard<std::mutex> guard(m_gatewayAcLock);
+    if (m_gatewayAcEvents.size() >= MAX_PENDING_AC_EVENTS)
+    {
+        DEBUG_LOG("WorldSession: dropping gateway AC event (type %u) for account %u; queue full (%zu pending)",
+                  uint32(acType), GetAccountId(), m_gatewayAcEvents.size());
+        return;
+    }
+
+    GatewayAcEvent ev;
+    ev.type     = acType;
+    ev.severity = severity;
+    ev.detail   = detail;
+    m_gatewayAcEvents.push_back(ev);
+}
+
 /// Logging helper for unexpected opcodes
 void WorldSession::LogUnexpectedOpcode(WorldPacket* packet, const char* reason)
 {
@@ -533,6 +557,43 @@ bool WorldSession::Update(PacketFilter& updater)
             ctx.latency = m_latEWMA;
             ctx.detail = "latency desync spike";
             sAntiCheatMgr->RecordViolation(p, AC_VIOLATION_DESYNC, 5.0f, ctx);
+        }
+    }
+
+    // Cluster gateway anti-cheat channel (Phase 1): drain violations reported by
+    // the game-independent gateway over GW_AC_EVENT. They were enqueued on the
+    // intake reactor thread (QueueGatewayAcEvent); we run them HERE on the world
+    // thread, where RecordGatewayViolation safely touches the Player/DB and may
+    // kick. Swap the queue out under lock, then process without holding the lock.
+    {
+        std::vector<GatewayAcEvent> events;
+        {
+            std::lock_guard<std::mutex> guard(m_gatewayAcLock);
+            if (!m_gatewayAcEvents.empty())
+                events.swap(m_gatewayAcEvents);
+        }
+
+        for (size_t i = 0; i < events.size(); ++i)
+        {
+            GatewayAcEvent const& ev = events[i];
+
+            // Validate the wire-supplied type number; ignore out-of-range values
+            // (the gateway is game-independent and sends a raw uint8).
+            if (ev.type == AC_VIOLATION_NONE || ev.type >= AC_VIOLATION_MAX)
+            {
+                DEBUG_LOG("WorldSession: ignoring gateway AC event with out-of-range type %u (account %u)",
+                          uint32(ev.type), GetAccountId());
+                continue;
+            }
+            AntiCheatViolationType type = AntiCheatViolationType(ev.type);
+
+            // Map severity (0..255 hint) to a score weight. A 0 severity means
+            // "unspecified" — use a sane default rather than a no-op weight.
+            float weight = ev.severity ? float(ev.severity) : 10.0f;
+
+            // RecordGatewayViolation gates on enabled/exempt internally and
+            // null-checks the player; it is a no-op pre-in-world.
+            sAntiCheatMgr->RecordGatewayViolation(GetPlayer(), type, weight, ev.detail.c_str());
         }
     }
 
