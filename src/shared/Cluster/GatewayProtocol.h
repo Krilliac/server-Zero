@@ -61,6 +61,16 @@
  *                        node B -> gateway: 1 = staged, 0 = failed.
  *   GW_MIGRATE_ABORT   : uint32 clientId
  *                        gateway -> node A: B failed; un-quiesce the saved session.
+ *
+ * Anti-cheat channel (Phase 1) payload:
+ *   GW_AC_EVENT        : uint32 clientId, uint8 acType, uint8 severity, string detail
+ *                        gateway -> node: a detected anti-cheat violation for a
+ *                        client. acType/severity are plain numbers (the gateway is
+ *                        game-independent and does not include the node's AC enum);
+ *                        the node maps clientId -> session and feeds acType/severity
+ *                        into AntiCheatMgr. `severity` is a 0..255 hint the node maps
+ *                        to a score weight; `detail` is a short static description
+ *                        (never client input).
  */
 
 #ifndef MANGOS_GATEWAYPROTOCOL_H
@@ -79,10 +89,11 @@ enum GatewayMsg
     GW_MIGRATE_REQUEST = 6, // (reserved, later phase) ask the gateway to flip a client to a new node
     GW_MIGRATE_ABORT   = 7, // (reserved, later phase) cancel an in-flight migration
     GW_HELLO           = 8, // gateway -> node: link authentication (pre-shared secret + protocol version); MUST be the first frame
+    GW_AC_EVENT        = 9, // gateway -> node: a detected anti-cheat violation for a client
 };
 
 // Protocol version carried in GW_HELLO; bump if the wire format changes.
-static const uint32 GW_PROTOCOL_VERSION = 1;
+static const uint32 GW_PROTOCOL_VERSION = 2;
 
 namespace GatewayFrame
 {
