@@ -267,6 +267,10 @@ namespace
         { "item",         AC_VIOLATION_ITEM },
         { "interact",     AC_VIOLATION_INTERACT },
         { "bot",          AC_VIOLATION_BOT },
+        { "gwspeed",      AC_VIOLATION_GW_SPEED },
+        { "rate",         AC_VIOLATION_RATE },
+        { "protocol",     AC_VIOLATION_PROTOCOL },
+        { "session",      AC_VIOLATION_SESSION },
     };
 }
 
@@ -358,6 +362,66 @@ bool ChatHandler::HandleAntiCheatTestCommand(char* args)
         PSendSysMessage("AntiCheat test: injected type %u weight %.0f on %s.",
                         uint32(type), weight, target->GetName());
     }
+
+    std::string st;
+    sAntiCheatMgr->BuildStatus(target, st);
+    SendSysMessage(st.c_str());
+    return true;
+}
+
+// .anticheat gwevent <type> <severity>
+// Inject a gateway-detected violation into the node pipeline WITHOUT the wire:
+// exercises AntiCheatMgr::RecordGatewayViolation (Task 3), which is the same path
+// GW_AC_EVENT drives through WorldSession::QueueGatewayAcEvent. Unlike `.anticheat
+// test` (which BYPASSES the gate via TestInject), this goes through the real
+// RecordViolation gate (enabled/exempt), so it mirrors live gateway behaviour.
+bool ChatHandler::HandleAntiCheatGwEventCommand(char* args)
+{
+    char* typeTok = strtok(args, " ");
+    char* sevTok  = strtok(NULL, " ");
+    if (!typeTok)
+    {
+        SendSysMessage(".anticheat gwevent FAILED. Usage: .anticheat gwevent <type> <severity>");
+        SendSysMessage("  <type>     = AntiCheatViolationType number (e.g. 16 = AC_VIOLATION_RATE)");
+        SendSysMessage("  <severity> = 1..255 score-weight hint (default 30)");
+        SendSysMessage("Routed through the REAL RecordGatewayViolation gate (enabled/exempt apply),");
+        SendSysMessage("exactly as a gateway GW_AC_EVENT would. Use .anticheat test for the gate-bypass path.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int typeNum = atoi(typeTok);
+    if (typeNum <= AC_VIOLATION_NONE || typeNum >= AC_VIOLATION_MAX)
+    {
+        PSendSysMessage(".anticheat gwevent FAILED: type %d out of range (1..%u). Use .anticheat test list.",
+                        typeNum, uint32(AC_VIOLATION_MAX) - 1);
+        SetSentErrorMessage(true);
+        return false;
+    }
+    AntiCheatViolationType type = AntiCheatViolationType(typeNum);
+
+    int severity = sevTok ? atoi(sevTok) : 30;
+    if (severity < 0)   severity = 0;
+    if (severity > 255) severity = 255;
+    float weight = severity ? float(severity) : 10.0f;
+
+    Player* target = getSelectedPlayer();
+    if (!target)
+        target = m_session ? m_session->GetPlayer() : NULL;
+    if (!target)
+    {
+        SendSysMessage(".anticheat gwevent FAILED: no player. Select/target a player or run in-game.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    sAntiCheatMgr->RecordGatewayViolation(target, type, weight, "gm-test");
+    PSendSysMessage("AntiCheat: injected gateway event type %u (severity %d, weight %.0f) on %s.",
+                    uint32(type), severity, weight, target->GetName());
+
+    if (!sAntiCheatMgr->IsEnabled())
+        SendSysMessage("AntiCheat note: framework is DISABLED — RecordGatewayViolation is gated off, "
+                       "so nothing was scored. Enable it (.anticheat set enable 1) to observe scoring.");
 
     std::string st;
     sAntiCheatMgr->BuildStatus(target, st);

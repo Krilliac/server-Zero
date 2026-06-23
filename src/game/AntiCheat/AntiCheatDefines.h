@@ -31,6 +31,10 @@ enum AntiCheatViolationType
     AC_VIOLATION_ITEM            = 12,  // illegitimate item use (e.g. using an item in the trade window)
     AC_VIOLATION_INTERACT        = 13,  // interaction beyond range (remote loot/use/interact attempt)
     AC_VIOLATION_BOT             = 14,  // bot-like movement (snap-to-waypoint + metronomic timing)
+    AC_VIOLATION_GW_SPEED        = 15,  // gateway independent-clock speed/time manipulation
+    AC_VIOLATION_RATE            = 16,  // packet flood / rate-limit breach (gateway)
+    AC_VIOLATION_PROTOCOL        = 17,  // malformed / oversized / illegal-state packet (gateway)
+    AC_VIOLATION_SESSION         = 18,  // multi-session / accounts-per-IP / mid-session IP change (gateway)
 
     AC_VIOLATION_MAX
 };
