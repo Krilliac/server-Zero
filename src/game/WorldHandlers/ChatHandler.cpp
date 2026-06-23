@@ -223,7 +223,6 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
         {
             std::string msg;
             recv_data >> msg;
-            sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
 
             if (msg.empty())
             {
@@ -244,6 +243,8 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
             {
                 break;
             }
+
+            sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated; tag the broadcast text only, never a command)
 
             if (type == CHAT_MSG_SAY)
             {
@@ -291,7 +292,6 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
             std::string to, msg;
             recv_data >> to;
             recv_data >> msg;
-            sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated)
 
             if (msg.empty())
             {
@@ -307,6 +307,8 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recv_data)
             {
                 return;
             }
+
+            sClusterMgr->TagChatMessage(msg); // cluster debug: prefix [N<id>] (gated; tag the broadcast text only, never a command)
 
             if (!normalizePlayerName(to))
             {

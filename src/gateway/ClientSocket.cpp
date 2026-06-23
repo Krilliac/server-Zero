@@ -82,6 +82,18 @@ extern DatabaseType LoginDatabase;
 #ifndef GATEWAY_CMSG_PLAYER_LOGIN
 #define GATEWAY_CMSG_PLAYER_LOGIN 0x3D
 #endif
+/// CMSG_PING / SMSG_PONG: connection keep-alive handled at the socket level (in a
+/// non-clustered server this is WorldSocket::HandlePing). There is no per-node
+/// socket behind a gateway-fronted session, so the gateway answers the ping
+/// ITSELF and must NOT forward it to the node (the node has no socket to ping and
+/// rejects CMSG_PING as a not-allowed opcode). CMSG_PING payload is
+/// uint32 ping(sequence) + uint32 latency; SMSG_PONG echoes the uint32 sequence.
+#ifndef GATEWAY_CMSG_PING
+#define GATEWAY_CMSG_PING 0x1DC
+#endif
+#ifndef GATEWAY_SMSG_PONG
+#define GATEWAY_SMSG_PONG 0x1DD
+#endif
 
 #if defined( __GNUC__ )
 #pragma pack(1)
@@ -476,6 +488,34 @@ int ClientSocket::handle_input_payload(void)
     }
     else
     {
+        // Intercept CMSG_PING: a connection keep-alive (the client sends one every
+        // ~30s). In a non-clustered server this is answered at the socket level by
+        // WorldSocket::HandlePing; behind the gateway there is no per-node socket,
+        // so we answer it HERE and never forward it to the node (which has no socket
+        // to ping and would reject CMSG_PING as a not-allowed opcode). Payload is
+        // uint32 ping(sequence) + uint32 latency; reply SMSG_PONG echoes the
+        // sequence. Done before HandlePlayerLogin / migration buffering / the
+        // GW_CLIENT_PACKET forward so the ping is fully handled at the gateway.
+        if (opcode == GATEWAY_CMSG_PING)
+        {
+            uint32 pingSeq = 0;
+            try
+            {
+                recv >> pingSeq; // latency follows but is not needed for the pong
+            }
+            catch (ByteBufferException&)
+            {
+                sLog.outError("ClientSocket: client %u sent a malformed CMSG_PING; ignoring",
+                    m_ClientId);
+                return rc;
+            }
+
+            ByteBuffer pong;
+            pong << uint32(pingSeq);
+            SendPacket(GATEWAY_SMSG_PONG, pong); // encrypts via iSendPacket
+            return rc; // do NOT forward CMSG_PING to the node
+        }
+
         // Phase 2 / Task 3: intercept CMSG_PLAYER_LOGIN (enter-world). Resolve
         // the character's owning node and, if it differs from the node currently
         // fronting this player-less session, re-home: release on the old node and
