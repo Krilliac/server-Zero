@@ -205,6 +205,7 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
                     case GW_SESSION_RELEASE: handleSessionRelease(in); break;
                     case GW_SESSION_PREPARE: handleSessionPrepare(in); break;
                     case GW_MIGRATE_ABORT:   handleMigrateAbort(in);   break;
+                    case GW_AC_EVENT:        handleAcEvent(in);        break;
                     default:
                         // Reserved/unsupported types are ignored in this phase.
                         DEBUG_LOG("GatewayLink: ignoring frame type %u (%u bytes)", type, len);
@@ -390,6 +391,32 @@ class GatewayLink : public ACE_Svc_Handler<ACE_SOCK_STREAM, ACE_NULL_SYNCH>
 
             if (!ok)
                 sLog.outError("Gateway intake: GW_SESSION_PREPARE FAILED for clientId %u; replied GW_SESSION_READY ok=0", clientId);
+        }
+
+        // GW_AC_EVENT: uint32 clientId, uint8 acType, uint8 severity, string detail.
+        // A gateway-detected anti-cheat violation for a client. We run on the
+        // intake REACTOR thread here, so we MUST NOT touch the Player / DB /
+        // AntiCheatMgr: we only map clientId -> session and hand the event to the
+        // session's thread-safe AC-event queue (drained on the world thread in
+        // WorldSession::Update). Wrapped by dispatch()'s try/catch(ByteBufferException).
+        void handleAcEvent(ByteBuffer& in)
+        {
+            uint32 clientId; in >> clientId;
+            uint8  acType;   in >> acType;
+            uint8  severity; in >> severity;
+            std::string detail; in >> detail;
+
+            WorldSession* session = sGatewayIntake.FindSession(clientId);
+            if (!session)
+            {
+                DEBUG_LOG("GatewayLink: GW_AC_EVENT for unknown clientId %u (acType %u, severity %u)",
+                          clientId, acType, severity);
+                return;
+            }
+
+            session->QueueGatewayAcEvent(acType, severity, detail);
+            DEBUG_LOG("GatewayLink: queued GW_AC_EVENT clientId %u (acType %u, severity %u, '%s')",
+                      clientId, acType, severity, detail.c_str());
         }
 
         // GW_MIGRATE_ABORT (node A / source): uint32 clientId.
