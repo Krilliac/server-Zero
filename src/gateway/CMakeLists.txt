@@ -86,6 +86,31 @@ target_link_libraries(gateway_authtest
         ace
 )
 
+# Standalone round-trip test for the GW_AC_EVENT payload (no DB / no socket).
+# Pins the {clientId, acType, severity, detail} field order both the gateway
+# (ReportAcViolation) and node (handleAcEvent) must agree on.
+add_executable(gateway_aceventtest
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gateway_acevent.cpp
+)
+
+target_compile_features(gateway_aceventtest PUBLIC cxx_std_17)
+set_target_properties(gateway_aceventtest PROPERTIES CXX_EXTENSIONS OFF)
+
+target_include_directories(gateway_aceventtest
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${OPENSSL_INCLUDE_DIR}
+)
+
+target_link_libraries(gateway_aceventtest
+    PUBLIC
+        shared
+        Threads::Threads
+        ${OPENSSL_LIBRARIES}
+        OpenSSL::Crypto
+        ace
+)
+
 if(WIN32 AND MSVC)
     install(
         FILES $<TARGET_PDB_FILE:gateway>

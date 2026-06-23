@@ -114,6 +114,15 @@ class ClientSocket : protected ClientHandler
         void OnMigrateRequest(uint32 destNode, uint32 charGuid);
         void OnSessionReady(bool ok);
 
+        /// Anti-cheat channel (Phase 1): report a gateway-detected violation for
+        /// this client to its owning node. Builds a GW_AC_EVENT payload
+        /// (clientId, type, severity, detail) and sends it on this client's node
+        /// link (sNodeRegistry().Get(m_CurrentNodeId)->SendFrame), exactly like
+        /// BuildSessionOpen/GW_SESSION_OPEN. No-op + DEBUG_LOG if the link is down.
+        /// `type`/`severity` are plain numbers: the gateway is game-independent and
+        /// does not include the node's AntiCheatViolationType enum.
+        void ReportAcViolation(uint8 type, uint8 severity, const char* detail);
+
     protected:
         /// Things called by the ACE framework.
         ClientSocket(void);

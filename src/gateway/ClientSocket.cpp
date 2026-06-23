@@ -53,6 +53,7 @@
 #include "Log.h"
 #include "Util.h"
 #include "ByteBuffer.h"
+#include "Config/Config.h"
 
 #include "Database/DatabaseEnv.h"
 #include "Auth/BigNumber.h"
@@ -93,6 +94,14 @@ extern DatabaseType LoginDatabase;
 #endif
 #ifndef GATEWAY_SMSG_PONG
 #define GATEWAY_SMSG_PONG 0x1DD
+#endif
+
+/// Anti-cheat violation-type numbers the gateway may report (Phase 1 self-test).
+/// These are plain numbers that MUST match AntiCheatDefines.h's
+/// AntiCheatViolationType on the node — the gateway stays game-independent and
+/// does NOT include that enum. (16 = AC_VIOLATION_RATE.)
+#ifndef GATEWAY_AC_VIOLATION_RATE
+#define GATEWAY_AC_VIOLATION_RATE 16
 #endif
 
 #if defined( __GNUC__ )
@@ -700,6 +709,17 @@ int ClientSocket::HandleAuthSession(ByteBuffer& recv)
             m_ClientId, m_AccountId, m_CurrentNodeId);
     }
 
+    // Anti-cheat channel self-test (Phase 1, diagnostic; off by default). When
+    // Gateway.SelfTestAcEvent is set, send ONE benign GW_AC_EVENT per client right
+    // after session open, so a full gateway -> node -> AntiCheatMgr round-trip can
+    // be observed in the node log. Pure diagnostic — not a real detection.
+    if (sConfig.GetBoolDefault("Gateway.SelfTestAcEvent", false))
+    {
+        ReportAcViolation(GATEWAY_AC_VIOLATION_RATE, 1, "selftest");
+        sLog.outString("ClientSocket: self-test GW_AC_EVENT sent for client %u (acct %u) to node %u",
+            m_ClientId, m_AccountId, m_CurrentNodeId);
+    }
+
     return 0;
 }
 
@@ -720,6 +740,30 @@ ByteBuffer ClientSocket::BuildSessionOpen() const
     openMsg << uint8(m_Locale);
     openMsg << m_AccountName;
     return openMsg;
+}
+
+/**
+ * @brief Report a gateway-detected anti-cheat violation to this client's node.
+ *
+ * Builds the GW_AC_EVENT payload (uint32 clientId, uint8 type, uint8 severity,
+ * string detail) and sends it on the node link that currently fronts this client
+ * (m_CurrentNodeId), mirroring the BuildSessionOpen/GW_SESSION_OPEN send path.
+ * Best-effort: if the link is down the event is dropped (DEBUG_LOG), never queued.
+ */
+void ClientSocket::ReportAcViolation(uint8 type, uint8 severity, const char* detail)
+{
+    ByteBuffer payload;
+    payload << uint32(m_ClientId);
+    payload << uint8(type);
+    payload << uint8(severity);
+    payload << std::string(detail ? detail : "");
+
+    NodeLink* link = sNodeRegistry().Get(m_CurrentNodeId);
+    if (!link || !link->SendFrame(GW_AC_EVENT, payload))
+    {
+        DEBUG_LOG("ClientSocket: GW_AC_EVENT for client %u (type %u, severity %u) not delivered to node %u (link down)",
+            m_ClientId, (uint32)type, (uint32)severity, m_CurrentNodeId);
+    }
 }
 
 /**

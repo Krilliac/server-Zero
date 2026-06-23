@@ -71,6 +71,15 @@ ConfVersion=@MANGOS_REALM_VER@
 #        0 = Minimum; 1 = Error; 2 = Detail; 3 = Full/Debug
 #        Default: 1
 #
+#    Gateway.SelfTestAcEvent
+#        Diagnostic for the Phase 1 anti-cheat channel. When 1, the gateway sends
+#        ONE benign GW_AC_EVENT (type = AC_VIOLATION_RATE, severity = 1,
+#        "selftest") to the owning node right after each client's session opens,
+#        so a full gateway -> node -> AntiCheatMgr round-trip can be observed in
+#        the node log (the node records an AC_VIOLATION_RATE for that player).
+#        Pure diagnostic; leave OFF in production.
+#        Default: 0
+#
 ################################################################################
 LoginDatabaseInfo      = "127.0.0.1;3306;root;mangos;realmd"
 CharacterDatabaseInfo  = "127.0.0.1;3306;root;mangos;character0"
@@ -91,3 +100,5 @@ Gateway.Secret         = ""
 LogFile                = "Gateway.log"
 PidFile                = ""
 LogLevel               = 1
+
+Gateway.SelfTestAcEvent = 0
