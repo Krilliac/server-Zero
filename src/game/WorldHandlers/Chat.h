@@ -283,6 +283,7 @@ class ChatHandler
         bool HandleAntiCheatUnjailCommand(char* args);
         bool HandleAntiCheatDeleteCommand(char* args);
         bool HandleAntiCheatTestCommand(char* args);
+        bool HandleAntiCheatGwEventCommand(char* args);
         bool HandleAntiCheatRubberbandCommand(char* args);
         bool HandleAntiCheatScoreCommand(char* args);
         bool HandleTimeSyncStatusCommand(char* args);

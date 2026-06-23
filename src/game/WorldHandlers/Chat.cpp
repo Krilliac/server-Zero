@@ -290,6 +290,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "unjail",         SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatUnjailCommand,          "", NULL },
         { "delete",         SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatDeleteCommand,          "", NULL },
         { "test",           SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatTestCommand,            "", NULL },
+        { "gwevent",        SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatGwEventCommand,         "", NULL },
         { "rubberband",     SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatRubberbandCommand,      "", NULL },
         { "score",          SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatScoreCommand,           "", NULL },
         { NULL,             0,                  false, NULL,                                                "", NULL }
