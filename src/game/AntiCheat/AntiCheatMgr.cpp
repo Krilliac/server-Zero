@@ -111,6 +111,38 @@ void AntiCheatMgr::RecordViolation(Player* player, AntiCheatViolationType type,
     DoRecord(player, type, weight, ctx);
 }
 
+void AntiCheatMgr::RecordGatewayViolation(Player* player, AntiCheatViolationType type,
+                                          float weight, const char* detail)
+{
+    // Pre-in-world gateway events have no Player to score against (Phase 1 does
+    // not persist account-only offences); log and drop rather than crash.
+    if (!player)
+    {
+        sLog.outError("AntiCheat: RecordGatewayViolation(type %u, weight %.0f, '%s') with no player; "
+                      "pre-in-world gateway events are not scored in this phase.",
+                      uint32(type), weight, detail ? detail : "");
+        return;
+    }
+
+    // Build a context from the player's current game state. The gateway is the
+    // neutral edge clock, so we carry no node-side speed/latency here (0).
+    AntiCheatContext ctx;
+    ctx.mapId   = player->GetMapId();
+    ctx.x       = player->GetPositionX();
+    ctx.y       = player->GetPositionY();
+    ctx.z       = player->GetPositionZ();
+    ctx.speed   = 0.f;
+    ctx.latency = 0;
+    ctx.detail  = detail ? detail : "gateway";
+
+    // Reuse the full gate: enabled/exempt check, scoring, persist, escalation,
+    // autoban. DoRecord clamps weight to [0,100]; clamp here too for clarity.
+    if (weight < 0.0f) weight = 0.0f;
+    if (weight > 100.0f) weight = 100.0f;
+
+    RecordViolation(player, type, weight, ctx);
+}
+
 void AntiCheatMgr::TestInject(Player* player, AntiCheatViolationType type,
                               float weight, AntiCheatContext const& ctx)
 {

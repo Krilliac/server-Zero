@@ -63,6 +63,19 @@ class AntiCheatMgr
         void RecordViolation(Player* player, AntiCheatViolationType type,
                              float weight, AntiCheatContext const& ctx);
 
+        // Gateway/edge ingress: a violation detected by the game-independent
+        // gateway (rate, protocol, session, independent-clock speed). Builds an
+        // AntiCheatContext from the player's current map/position and routes
+        // through the same RecordViolation gate (enabled/exempt/score/escalate/
+        // autoban) — so config gating and GM exemption apply unchanged.
+        // MUST be called on the world thread (it touches Player + DB). Off-thread
+        // callers marshal via WorldSession::QueueGatewayAcEvent first.
+        // If `player` is null it logs and returns (pre-in-world gateway events are
+        // not scored in Phase 1). Exercised end-to-end by the `.anticheat gwevent`
+        // GM command and the gateway self-test (no standalone unit test).
+        void RecordGatewayViolation(Player* player, AntiCheatViolationType type,
+                                    float weight, const char* detail);
+
         // GM/dev TEST ingress: runs the full scoring+persist+marker+escalation
         // pipeline while BYPASSING the enabled/exempt gate, so `.anticheat test`
         // can exercise every capability on a GM. Not used by detectors.
