@@ -1973,6 +1973,10 @@ Cluster.Chat.TagNode         = 0
 #        runs and a normal mangosd boot is unchanged. This is independent of the
 #        Cluster.* switches above; it only needs to be set on nodes fronted by a
 #        gateway.
+#        IMPORTANT: clients connect to the GATEWAY (gateway.conf GatewayPort), not to
+#        this node, so a fronted node's WorldServerPort MUST DIFFER from the gateway's
+#        GatewayPort (e.g. gateway on 8085, this node on 8090). The realm in the
+#        realmlist DB should point at the gateway's address:port.
 #        Default: 0 (off)
 #
 #    Gateway.IntakeBindIP
