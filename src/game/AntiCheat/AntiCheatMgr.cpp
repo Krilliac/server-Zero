@@ -8,6 +8,7 @@
 #include "MovementAnticheat.h"
 #include "Player.h"
 #include "World.h"
+#include "ObjectMgr.h"
 #include "Log.h"
 #include "Timer.h"
 #include "Database/DatabaseEnv.h"
@@ -22,9 +23,13 @@ AntiCheatMgr::AntiCheatMgr()
       m_teleportDistance(50), m_scoreWarn(30), m_scoreRubberband(60),
       m_scoreKick(120), m_decayPerSec(2),
       m_autobanEnable(false), m_autobanKickPoints(10), m_autobanThreshold(30),
-      m_autobanDecayPerHour(1)
+      m_autobanDecayPerHour(1),
+      m_migrationValidate(false), m_migrationSpeedTolPct(400), m_migrationMaxElapsedSec(30),
+      m_autobanGmExempt(true), m_evasionFlagEnable(false)
 {
     m_autobanDur[0] = 86400; m_autobanDur[1] = 604800; m_autobanDur[2] = 0;
+    for (uint32 i = 0; i < AC_VIOLATION_MAX; ++i)
+        m_autobanWeightMul[i] = 100;
 }
 
 void AntiCheatMgr::Init()
@@ -62,6 +67,23 @@ void AntiCheatMgr::LoadConfig()
     m_autobanDur[0]      = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_DUR1);
     m_autobanDur[1]      = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_DUR2);
     m_autobanDur[2]      = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_DUR3);
+
+    // Phase 4 cluster migration-seam validation.
+    m_migrationValidate     = sWorld.getConfig(CONFIG_BOOL_ANTICHEAT_MIGRATION_VALIDATE);
+    m_migrationSpeedTolPct  = sWorld.getConfig(CONFIG_UINT32_ANTICHEAT_MIGRATION_SPEED_TOL);
+    m_migrationMaxElapsedSec = sWorld.getConfig(CONFIG_UINT32_ANTICHEAT_MIGRATION_MAX_ELAPSED);
+
+    // Phase 6 autoban tuning. Reset all per-type multipliers to 100% then overwrite
+    // the curated high-signal indices from config.
+    m_autobanGmExempt    = sWorld.getConfig(CONFIG_BOOL_AC_AUTOBAN_GM_EXEMPT);
+    m_evasionFlagEnable  = sWorld.getConfig(CONFIG_BOOL_AC_AUTOBAN_EVASION_FLAG);
+    for (uint32 i = 0; i < AC_VIOLATION_MAX; ++i)
+        m_autobanWeightMul[i] = 100;
+    m_autobanWeightMul[AC_VIOLATION_TELEPORT] = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_WEIGHT_TELEPORT);
+    m_autobanWeightMul[AC_VIOLATION_FLAG_CONTRADICT] = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_WEIGHT_FLY);
+    m_autobanWeightMul[AC_VIOLATION_SPEED]    = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_WEIGHT_SPEED);
+    m_autobanWeightMul[AC_VIOLATION_PROTOCOL] = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_WEIGHT_PROTOCOL);
+    m_autobanWeightMul[AC_VIOLATION_GW_SPEED] = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_WEIGHT_SPEED);
 }
 
 bool AntiCheatMgr::IsExempt(Player* player) const
@@ -226,17 +248,25 @@ void AntiCheatMgr::SetScore(Player* player, float score)
 
 void AntiCheatMgr::BuildDiag(std::string& out)
 {
-    char buf[512];
+    char buf[768];
     snprintf(buf, sizeof(buf),
              "AntiCheat config: enabled=%u movement=%u physics=%u accelCheck=%u | "
              "actionCeiling=%u warn=%u rubber=%u kick=%u decay/s=%u | "
-             "speedTol=%u%% teleDist=%u | autoban=%u (kickPts=%u thr=%u) | "
-             "persist=%u exemptGmLvl=%u exemptBots=%u",
+             "speedTol=%u%% teleDist=%u | autoban=%u (kickPts=%u thr=%u gmExempt=%u "
+             "evasionFlag=%u wTele=%u%% wFly=%u%% wSpeed=%u%% wProto=%u%%) | "
+             "migration: validate=%u tol=%u%% maxElapsed=%us | "
+             "noclipStrict=%u knockback=%u | persist=%u exemptGmLvl=%u exemptBots=%u",
              (uint32)m_enabled, (uint32)m_movementEnabled, (uint32)m_physicsEnabled,
              (uint32)sWorld.getConfig(CONFIG_BOOL_ANTICHEAT_ACCEL_CHECK),
              m_actionCeiling, m_scoreWarn, m_scoreRubberband, m_scoreKick, m_decayPerSec,
              m_speedTolerancePct, m_teleportDistance,
              (uint32)m_autobanEnable, m_autobanKickPoints, m_autobanThreshold,
+             (uint32)m_autobanGmExempt, (uint32)m_evasionFlagEnable,
+             m_autobanWeightMul[AC_VIOLATION_TELEPORT], m_autobanWeightMul[AC_VIOLATION_FLAG_CONTRADICT],
+             m_autobanWeightMul[AC_VIOLATION_SPEED], m_autobanWeightMul[AC_VIOLATION_PROTOCOL],
+             (uint32)m_migrationValidate, m_migrationSpeedTolPct, m_migrationMaxElapsedSec,
+             (uint32)sWorld.getConfig(CONFIG_BOOL_ANTICHEAT_NOCLIP_STRICT),
+             (uint32)sWorld.getConfig(CONFIG_BOOL_ANTICHEAT_KNOCKBACK_CHECK),
              (uint32)m_persist, m_exemptGmLevel, (uint32)m_exemptBots);
     out = buf;
 }
@@ -253,7 +283,7 @@ void AntiCheatMgr::Apply(Player* player, float score, AntiCheatViolationType typ
         AlertGMs(player, type, score, ctx);
         // Anti-gaming autoban: count this kick against the account first.
         if (m_autobanEnable)
-            AccumulateKick(player);
+            AccumulateKick(player, type);
         if (player->GetSession())
             player->GetSession()->KickPlayer();
         return;
@@ -330,6 +360,24 @@ void AntiCheatMgr::Update(uint32 /*diff*/)
         BanReturn r = sWorld.BanAccount(BAN_CHARACTER, it->charName, it->durationSecs, it->reason, "AntiCheat");
         sLog.outError("AntiCheat: AUTOBAN account of '%s' for %us (%s) -> result %u",
                       it->charName.c_str(), it->durationSecs, it->reason.c_str(), uint32(r));
+
+        // Phase 6 ban-evasion flagging (report-only): if enabled, find non-GM
+        // accounts sharing the banned account's last_ip and LOG them for GM review.
+        // Never auto-bans alts — shared IPs (NAT/household/café) cause false matches.
+        if (m_evasionFlagEnable && r == BAN_SUCCESS)
+        {
+            uint32 bannedAcc = sObjectMgr.GetPlayerAccountIdByPlayerName(it->charName);
+            if (bannedAcc)
+            {
+                std::vector<AntiCheatAlt> alts;
+                CorrelateByIp(bannedAcc, alts);
+                for (std::vector<AntiCheatAlt>::const_iterator a = alts.begin(); a != alts.end(); ++a)
+                    sLog.outBasic("AntiCheat: ban-evasion WATCH — account %u (%s) shares IP %s with "
+                                  "just-banned %u; kick_score=%.0f banned=%u",
+                                  a->accountId, a->username.c_str(), a->lastIp.c_str(),
+                                  bannedAcc, a->kickScore, uint32(a->banned ? 1 : 0));
+            }
+        }
     }
 
     // Prune fully-decayed idle entries so the score map doesn't grow unbounded
@@ -357,14 +405,53 @@ float AntiCheatMgr::DecayedKickScore(AccountState& s, uint32 nowSec) const
     return s.kickScore;
 }
 
-void AntiCheatMgr::AccumulateKick(Player* player)
+bool AntiCheatMgr::ReadAccountRow(uint32 accountId, AccountState& out)
+{
+    out = AccountState();
+    QueryResult* result = LoginDatabase.PQuery(
+        "SELECT `kick_score`,`ban_count`,`last_update` FROM `account_anticheat` WHERE `account`=%u",
+        accountId);
+    if (!result)
+        return false;
+    Field* f = result->Fetch();
+    out.kickScore  = f[0].GetFloat();
+    out.banCount   = f[1].GetUInt32();
+    out.lastUpdate = f[2].GetUInt32();
+    delete result;
+    return true;
+}
+
+float AntiCheatMgr::PerTypeKickWeight(AntiCheatViolationType type) const
+{
+    uint32 mul = 100;
+    if (type > AC_VIOLATION_NONE && type < AC_VIOLATION_MAX)
+        mul = m_autobanWeightMul[type];
+    return float(m_autobanKickPoints) * float(mul) / 100.0f;
+}
+
+void AntiCheatMgr::AccumulateKick(Player* player, AntiCheatViolationType type)
 {
     if (!player || !player->GetSession())
         return;
 
+    // Phase 6 belt-and-suspenders: kicks already pass the IsExempt gate before
+    // reaching here, but skip GM accounts explicitly so a GM can never accrue an
+    // account-level autoban score even if a future caller bypasses Apply()'s gate.
+    if (m_autobanGmExempt && m_exemptGmLevel > 0 &&
+        player->GetSession()->GetSecurity() >= (AccountTypes)m_exemptGmLevel)
+        return;
+
     uint32 accountId = player->GetSession()->GetAccountId();
-    uint32 nowSec = uint32(sWorld.GetGameTime());
+    uint32 nowSec    = uint32(sWorld.GetGameTime());
     std::string charName = player->GetName();
+
+    // Cluster correctness (Phase 6): re-read the authoritative shared-DB row BEFORE
+    // incrementing, so kicks landing on different nodes accumulate instead of each
+    // node clobbering the row from a stale local cache. The DB read is done WITHOUT
+    // the score lock (DB calls must not hold the mutex); we reconcile under the lock
+    // below. Identical threading to the PersistAccount write a few lines later.
+    AccountState fresh;
+    bool haveRow = ReadAccountRow(accountId, fresh);
 
     bool queueBan = false;
     uint32 duration = 0;
@@ -372,8 +459,15 @@ void AntiCheatMgr::AccumulateKick(Player* player)
     {
         std::lock_guard<std::mutex> guard(m_lock);
         AccountState& s = m_accounts[accountId];
+        // Adopt the authoritative row so we never build on a stale local value.
+        if (haveRow)
+        {
+            s.kickScore  = fresh.kickScore;
+            s.banCount   = fresh.banCount;
+            s.lastUpdate = fresh.lastUpdate;
+        }
         DecayedKickScore(s, nowSec);
-        s.kickScore += float(m_autobanKickPoints);
+        s.kickScore += PerTypeKickWeight(type);   // per-type weighting (Phase 6)
 
         if (s.kickScore >= float(m_autobanThreshold))
         {
@@ -391,7 +485,7 @@ void AntiCheatMgr::AccumulateKick(Player* player)
             PendingBan pb;
             pb.charName = charName;
             pb.durationSecs = duration;
-            pb.reason = "Automated: repeated anti-cheat kicks";
+            pb.reason = "Automated: repeated anti-cheat kicks (cluster-wide)";
             m_pendingBans.push_back(pb);
         }
     }
@@ -432,6 +526,84 @@ void AntiCheatMgr::LoadAccounts()
     while (result->NextRow());
     delete result;
     sLog.outString("AntiCheat: loaded %u account autoban records.", uint32(m_accounts.size()));
+}
+
+bool AntiCheatMgr::GetAccountAutobanState(uint32 accountId, float& kickScore,
+                                          uint32& banCount, uint32& lastUpdate)
+{
+    // Read-through so a GM sees the authoritative CLUSTER-WIDE value (shared realm
+    // DB), not this node's possibly-stale cache. Decay to "now" for display.
+    AccountState s;
+    bool have = ReadAccountRow(accountId, s);
+    uint32 nowSec = uint32(sWorld.GetGameTime());
+    DecayedKickScore(s, nowSec);
+    kickScore  = s.kickScore;
+    banCount   = s.banCount;
+    lastUpdate = s.lastUpdate;
+    // Keep the local cache consistent with what we just read.
+    {
+        std::lock_guard<std::mutex> guard(m_lock);
+        m_accounts[accountId] = s;
+    }
+    return have;
+}
+
+void AntiCheatMgr::ResetAccount(uint32 accountId)
+{
+    LoginDatabase.PExecute("DELETE FROM `account_anticheat` WHERE `account`=%u", accountId);
+    std::lock_guard<std::mutex> guard(m_lock);
+    m_accounts.erase(accountId);
+}
+
+void AntiCheatMgr::CorrelateByIp(uint32 accountId, std::vector<AntiCheatAlt>& out)
+{
+    out.clear();
+
+    // Look up the banned/target account's most-recent IP (shared realm DB).
+    QueryResult* ipRes = LoginDatabase.PQuery(
+        "SELECT `last_ip` FROM `account` WHERE `id`=%u", accountId);
+    if (!ipRes)
+        return;
+    std::string ip = ipRes->Fetch()[0].GetCppString();
+    delete ipRes;
+    if (ip.empty())
+        return;
+
+    // Peers sharing the most-recent IP, excluding the account itself. last_ip
+    // collisions are common+legitimate (NAT, households, cafés, dynamic-IP reuse),
+    // so this is best-effort and FLAG-ONLY — never an automatic ban.
+    QueryResult* peers = LoginDatabase.PQuery(
+        "SELECT `id`,`username`,`last_ip`,`gmlevel` FROM `account` "
+        "WHERE `last_ip`='%s' AND `id`<>%u", ip.c_str(), accountId);
+    if (!peers)
+        return;
+
+    do
+    {
+        Field* pf = peers->Fetch();
+        AntiCheatAlt alt;
+        alt.accountId = pf[0].GetUInt32();
+        alt.username  = pf[1].GetCppString();
+        alt.lastIp    = pf[2].GetCppString();
+        alt.isGm      = pf[3].GetUInt32() > 0;
+        if (alt.isGm)               // never flag GM accounts
+            continue;
+
+        AccountState st;
+        ReadAccountRow(alt.accountId, st);
+        alt.kickScore = st.kickScore;
+        alt.banCount  = st.banCount;
+
+        QueryResult* banRes = LoginDatabase.PQuery(
+            "SELECT 1 FROM `account_banned` WHERE `id`=%u AND `active`=1 LIMIT 1", alt.accountId);
+        alt.banned = (banRes != NULL);
+        if (banRes)
+            delete banRes;
+
+        out.push_back(alt);
+    }
+    while (peers->NextRow());
+    delete peers;
 }
 
 void AntiCheatMgr::RemovePlayer(uint32 lowGuid)

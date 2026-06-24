@@ -291,6 +291,9 @@ ChatCommand* ChatHandler::getCommandTable()
         { "delete",         SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatDeleteCommand,          "", NULL },
         { "test",           SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatTestCommand,            "", NULL },
         { "gwevent",        SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatGwEventCommand,         "", NULL },
+        { "migtest",        SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatMigTestCommand,         "", NULL },
+        { "autoban",        SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatAutobanCommand,         "", NULL },
+        { "evasion",        SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatEvasionCommand,         "", NULL },
         { "rubberband",     SEC_GAMEMASTER,     true,  &ChatHandler::HandleAntiCheatRubberbandCommand,      "", NULL },
         { "score",          SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleAntiCheatScoreCommand,           "", NULL },
         { NULL,             0,                  false, NULL,                                                "", NULL }

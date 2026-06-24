@@ -284,6 +284,9 @@ class ChatHandler
         bool HandleAntiCheatDeleteCommand(char* args);
         bool HandleAntiCheatTestCommand(char* args);
         bool HandleAntiCheatGwEventCommand(char* args);
+        bool HandleAntiCheatMigTestCommand(char* args);
+        bool HandleAntiCheatAutobanCommand(char* args);
+        bool HandleAntiCheatEvasionCommand(char* args);
         bool HandleAntiCheatRubberbandCommand(char* args);
         bool HandleAntiCheatScoreCommand(char* args);
         bool HandleTimeSyncStatusCommand(char* args);

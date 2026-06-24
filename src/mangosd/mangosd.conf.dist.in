@@ -1929,6 +1929,42 @@ AntiCheat.Autoban.DecayPerHour = 1
 AntiCheat.Autoban.Duration1  = 86400
 AntiCheat.Autoban.Duration2  = 604800
 AntiCheat.Autoban.Duration3  = 0
+#    Cluster anti-cheat Phase 6: autoban tuning. The account accumulator lives in
+#    the SHARED realm/login DB, so it is already CLUSTER-WIDE; the read-through
+#    accumulate makes kicks landing on different nodes aggregate instead of one node
+#    clobbering another's progress.
+#       AntiCheat.Autoban.GmExempt        belt-and-suspenders: never accrue on GMs (default 1)
+#       AntiCheat.Autoban.EvasionFlag     on autoban, LOG non-GM accounts sharing the
+#                                         last_ip (REPORT ONLY — never auto-bans alts; default 0)
+#       AntiCheat.Autoban.Weight.*        per-violation-type kick weight (percent of
+#                                         KickPoints) so blatant cheats cost more toward a ban
+AntiCheat.Autoban.GmExempt   = 1
+AntiCheat.Autoban.EvasionFlag = 0
+AntiCheat.Autoban.Weight.Teleport = 200
+AntiCheat.Autoban.Weight.Fly      = 200
+AntiCheat.Autoban.Weight.Speed    = 150
+AntiCheat.Autoban.Weight.Protocol = 120
+#    Cluster anti-cheat Phase 4: migration seam state-consistency validation. When a
+#    player migrates between cluster nodes, the destination node validates the
+#    arriving position vs the source node's last-known position + elapsed time (an
+#    impossible jump = teleport hack) and coarse stat/inventory bounds. Legit server
+#    teleports/migrations are whitelisted via the movement re-anchor. OFF by default
+#    (only meaningful in a migrating cluster).
+#       AntiCheat.Migration.Validate           master switch (default 0)
+#       AntiCheat.Migration.SpeedTolerancePct  % of run-speed the seam tolerates over
+#                                              seconds (default 400 = 4x; wide on purpose)
+#       AntiCheat.Migration.MaxElapsedSec      if (now - departed) exceeds this, BAIL
+#                                              (slow hand-off / clock skew; default 30)
+AntiCheat.Migration.Validate = 0
+AntiCheat.Migration.SpeedTolerancePct = 400
+AntiCheat.Migration.MaxElapsedSec = 30
+#    Cluster anti-cheat Phase 5: optional movement-hack checks (both FP-prone, OFF).
+#       AntiCheat.NoClipStrict     also LoS-test airborne / large-vertical steps
+#                                  (more coverage, more FP near ledges/stairs; default 0)
+#       AntiCheat.KnockbackCheck   flag a player who neither acks nor displaces after a
+#                                  server-sent knockback (latency-sensitive; default 0)
+AntiCheat.NoClipStrict       = 0
+AntiCheat.KnockbackCheck     = 0
 TimeSync.Enable              = 1
 TimeSync.EWMA.Alpha          = 20
 TimeSync.Desync.Threshold    = 1000

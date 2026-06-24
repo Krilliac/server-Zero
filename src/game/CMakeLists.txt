@@ -329,3 +329,17 @@ if(PLAYERBOTS)
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/aiplayerbot.conf.dist
     DESTINATION ${CONF_INSTALL_DIR})
 endif()
+
+# Standalone AntiCheat self-tests (pure logic, no engine deps). OFF by default so
+# the normal mangosd build never compiles them; enable with -DBUILD_AC_TESTS=ON.
+# Mirrors the gateway_speedtest pattern.
+option(BUILD_AC_TESTS "Build the standalone AntiCheat pure-logic self-tests" OFF)
+if(BUILD_AC_TESTS)
+    add_executable(ac_migration_test ${CMAKE_CURRENT_SOURCE_DIR}/AntiCheat/test/test_migration_validate.cpp)
+    target_compile_features(ac_migration_test PUBLIC cxx_std_17)
+    set_target_properties(ac_migration_test PROPERTIES CXX_EXTENSIONS OFF)
+
+    add_executable(ac_autoban_test ${CMAKE_CURRENT_SOURCE_DIR}/AntiCheat/test/test_autoban_decay.cpp)
+    target_compile_features(ac_autoban_test PUBLIC cxx_std_17)
+    set_target_properties(ac_autoban_test PROPERTIES CXX_EXTENSIONS OFF)
+endif()

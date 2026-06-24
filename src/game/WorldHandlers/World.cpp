@@ -958,6 +958,13 @@ void World::LoadConfigSettings(bool reload)
     // Bot-movement heuristic (snap-to-waypoint + metronomic packet timing over a
     // 30s window). Heuristic/FP-prone, so OFF by default.
     setConfig(CONFIG_BOOL_ANTICHEAT_BOT_DETECT,     "AntiCheat.BotDetect", false);
+    // Cluster anti-cheat Phase 5: no-clip strict mode also LoS-tests airborne /
+    // large-vertical steps (more coverage, more FP-prone near ledges/stairs). OFF.
+    setConfig(CONFIG_BOOL_ANTICHEAT_NOCLIP_STRICT,   "AntiCheat.NoClipStrict", false);
+    // Cluster anti-cheat Phase 5: anti-knockback flags a player who neither acks
+    // nor displaces after a server-sent knockback within the window. OFF
+    // (latency-sensitive, log-first until tuned against real logs).
+    setConfig(CONFIG_BOOL_ANTICHEAT_KNOCKBACK_CHECK, "AntiCheat.KnockbackCheck", false);
     setConfig(CONFIG_BOOL_TIMESYNC_ENABLE,          "TimeSync.Enable", true);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_ALPHA,   "TimeSync.EWMA.Alpha", 20, 1, 100);
     setConfigMinMax(CONFIG_UINT32_TIMESYNC_DESYNC,  "TimeSync.Desync.Threshold", 1000, 100, 60000);
@@ -1047,6 +1054,23 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_UINT32_AC_AUTOBAN_DUR1,            "AntiCheat.Autoban.Duration1", 86400);   // 1 day
     setConfig(CONFIG_UINT32_AC_AUTOBAN_DUR2,            "AntiCheat.Autoban.Duration2", 604800);  // 7 days
     setConfig(CONFIG_UINT32_AC_AUTOBAN_DUR3,            "AntiCheat.Autoban.Duration3", 0);       // 0 = permanent
+    // Cluster anti-cheat Phase 6: autoban tuning. GM-exempt is belt-and-suspenders
+    // (kicks already pass the exempt gate). Per-type weight multipliers (percent)
+    // let blatant cheats cost more toward a ban than borderline ones. Ban-evasion
+    // IP correlation is report-only (never auto-bans alts). The account accumulator
+    // lives in the shared realm DB, so it is cluster-wide.
+    setConfig(CONFIG_BOOL_AC_AUTOBAN_GM_EXEMPT,         "AntiCheat.Autoban.GmExempt", true);
+    setConfig(CONFIG_BOOL_AC_AUTOBAN_EVASION_FLAG,      "AntiCheat.Autoban.EvasionFlag", false);
+    setConfigMinMax(CONFIG_UINT32_AC_AUTOBAN_WEIGHT_TELEPORT, "AntiCheat.Autoban.Weight.Teleport", 200, 0, 1000);
+    setConfigMinMax(CONFIG_UINT32_AC_AUTOBAN_WEIGHT_FLY,      "AntiCheat.Autoban.Weight.Fly",      200, 0, 1000);
+    setConfigMinMax(CONFIG_UINT32_AC_AUTOBAN_WEIGHT_SPEED,    "AntiCheat.Autoban.Weight.Speed",    150, 0, 1000);
+    setConfigMinMax(CONFIG_UINT32_AC_AUTOBAN_WEIGHT_PROTOCOL, "AntiCheat.Autoban.Weight.Protocol", 120, 0, 1000);
+    // Cluster anti-cheat Phase 4: validate a migrating player's arriving state on
+    // the destination node (position vs last-known + elapsed time, stat/inventory
+    // bounds). OFF by default — only meaningful in a migrating cluster.
+    setConfig(CONFIG_BOOL_ANTICHEAT_MIGRATION_VALIDATE, "AntiCheat.Migration.Validate", false);
+    setConfigMinMax(CONFIG_UINT32_ANTICHEAT_MIGRATION_SPEED_TOL, "AntiCheat.Migration.SpeedTolerancePct", 400, 100, 2000);
+    setConfigMinMax(CONFIG_UINT32_ANTICHEAT_MIGRATION_MAX_ELAPSED, "AntiCheat.Migration.MaxElapsedSec", 30, 1, 600);
 
     m_relocation_ai_notify_delay = sConfig.GetIntDefault("Visibility.AIRelocationNotifyDelay", 1000u);
     m_relocation_lower_limit_sq  = pow(sConfig.GetFloatDefault("Visibility.RelocationLowerLimit", 10), 2);

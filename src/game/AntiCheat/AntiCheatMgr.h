@@ -114,6 +114,35 @@ class AntiCheatMgr
         bool   MovementEnabled() const { return m_testBypass || (m_enabled && m_movementEnabled); }
         bool   PhysicsEnabled()  const { return m_testBypass || (m_enabled && m_physicsEnabled); }
 
+        // Phase 4 cluster migration-seam validation config getters (cached).
+        bool   MigrationValidateEnabled()  const { return m_migrationValidate; }
+        uint32 GetMigrationSpeedTolPct()   const { return m_migrationSpeedTolPct; }
+        uint32 GetMigrationMaxElapsedSec() const { return m_migrationMaxElapsedSec; }
+
+        // Phase 6 read-through helper used by the GM .anticheat autoban command to
+        // report the authoritative CLUSTER-WIDE account state (re-SELECTed from the
+        // shared realm DB, decayed to now), not this node's stale cache.
+        bool GetAccountAutobanState(uint32 accountId, float& kickScore,
+                                    uint32& banCount, uint32& lastUpdate);
+        // GM tool: zero an account's autoban accumulator in the shared DB + cache.
+        void ResetAccount(uint32 accountId);
+
+        // Phase 6 ban-evasion correlation result (flag-only, GM-reviewed).
+        struct AntiCheatAlt
+        {
+            uint32 accountId;
+            std::string username;
+            std::string lastIp;
+            float  kickScore;
+            uint32 banCount;
+            bool   banned;
+            bool   isGm;
+            AntiCheatAlt() : accountId(0), kickScore(0.f), banCount(0), banned(false), isGm(false) {}
+        };
+        // Best-effort: list non-GM accounts sharing the given account's last_ip
+        // (excluding itself). Never bans — a GM reviews and acts manually.
+        void CorrelateByIp(uint32 accountId, std::vector<AntiCheatAlt>& out);
+
     private:
         AntiCheatMgr();
         ~AntiCheatMgr() {}
@@ -168,10 +197,20 @@ class AntiCheatMgr
         // Anti-gaming autoban: accumulate a kick against the player's account and,
         // if the decayed account score crosses the threshold, queue an escalating
         // ban (applied on the world thread in Update()). Called from Apply() on KICK.
-        void AccumulateKick(Player* player);
+        void AccumulateKick(Player* player, AntiCheatViolationType type);
         float DecayedKickScore(AccountState& s, uint32 nowSec) const;
         void LoadAccounts();
         void PersistAccount(uint32 accountId, AccountState const& s);
+
+        // Phase 6 cluster-correctness: re-SELECT the authoritative account row from
+        // the shared LoginDatabase into `out` (default-constructed if absent). Used
+        // by AccumulateKick to read-through before incrementing, so kicks landing on
+        // different nodes accumulate instead of clobbering a stale local cache.
+        bool ReadAccountRow(uint32 accountId, AccountState& out);
+
+        // Phase 6 tuning: per-violation-type kick weight toward the autoban
+        // threshold (config-driven percent multiplier of m_autobanKickPoints).
+        float PerTypeKickWeight(AntiCheatViolationType type) const;
 
         bool   m_enabled;
         bool   m_testBypass;          // transient: `.cheat` simulation in progress
@@ -194,6 +233,18 @@ class AntiCheatMgr
         uint32 m_autobanThreshold;
         uint32 m_autobanDecayPerHour;
         uint32 m_autobanDur[3];
+
+        // Phase 4 cluster migration-seam validation config.
+        bool   m_migrationValidate;
+        uint32 m_migrationSpeedTolPct;
+        uint32 m_migrationMaxElapsedSec;
+
+        // Phase 6 autoban tuning: GM-exempt belt-and-suspenders, ban-evasion IP
+        // flagging (report-only), and per-violation-type kick-weight multipliers
+        // (percent, default 100) so blatant cheats cost more toward a ban.
+        bool   m_autobanGmExempt;
+        bool   m_evasionFlagEnable;
+        uint32 m_autobanWeightMul[AC_VIOLATION_MAX];
 
         std::map<uint32, ScoreState>   m_scores;   // keyed by character low-guid
         std::map<uint32, AccountState> m_accounts; // keyed by account id (autoban)

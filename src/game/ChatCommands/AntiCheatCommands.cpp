@@ -7,6 +7,7 @@
 #include "MovementAnticheat.h"
 #include "Player.h"
 #include "World.h"
+#include "AccountMgr.h"
 #include "ObjectMgr.h"
 #include "ObjectAccessor.h"
 #include "Map.h"
@@ -115,9 +116,10 @@ bool ChatHandler::HandleAntiCheatSetCommand(char* args)
     if (!f || !v)
     {
         SendSysMessage(".anticheat set FAILED. Usage: .anticheat set <field> <value>. Fields:");
-        SendSysMessage("  bool: enable, movement, physics, accelcheck, exemptbots, persist, autoban");
+        SendSysMessage("  bool: enable, movement, physics, accelcheck, exemptbots, persist, autoban,");
+        SendSysMessage("        noclipstrict, knockbackcheck, migvalidate, autobangmexempt, evasionflag");
         SendSysMessage("  uint: action(1-4), warn, rubberband, kick, decay, speedtol, teledist,");
-        SendSysMessage("        castburst, accelmult, exemptgm");
+        SendSysMessage("        castburst, accelmult, exemptgm, autobanthreshold, autobankickpts, autobandecay");
         SetSentErrorMessage(true);
         return false;
     }
@@ -132,6 +134,14 @@ bool ChatHandler::HandleAntiCheatSetCommand(char* args)
     else if (field == "exemptbots") sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_EXEMPT_BOTS, val != 0);
     else if (field == "persist")    sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_PERSIST, val != 0);
     else if (field == "autoban")    sWorld.setConfig(CONFIG_BOOL_AC_AUTOBAN_ENABLE, val != 0);
+    else if (field == "noclipstrict")   sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_NOCLIP_STRICT, val != 0);
+    else if (field == "knockbackcheck") sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_KNOCKBACK_CHECK, val != 0);
+    else if (field == "migvalidate")    sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_MIGRATION_VALIDATE, val != 0);
+    else if (field == "autobangmexempt") sWorld.setConfig(CONFIG_BOOL_AC_AUTOBAN_GM_EXEMPT, val != 0);
+    else if (field == "evasionflag")    sWorld.setConfig(CONFIG_BOOL_AC_AUTOBAN_EVASION_FLAG, val != 0);
+    else if (field == "autobanthreshold") sWorld.setConfig(CONFIG_UINT32_AC_AUTOBAN_THRESHOLD, val);
+    else if (field == "autobankickpts")   sWorld.setConfig(CONFIG_UINT32_AC_AUTOBAN_KICKPOINTS, val);
+    else if (field == "autobandecay")     sWorld.setConfig(CONFIG_UINT32_AC_AUTOBAN_DECAY_PER_HOUR, val);
     else if (field == "action")     sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_ACTION, val);
     else if (field == "warn")       sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_SCORE_WARN, val);
     else if (field == "rubberband") sWorld.setConfig(CONFIG_UINT32_ANTICHEAT_SCORE_RUBBER, val);
@@ -271,6 +281,7 @@ namespace
         { "rate",         AC_VIOLATION_RATE },
         { "protocol",     AC_VIOLATION_PROTOCOL },
         { "session",      AC_VIOLATION_SESSION },
+        { "knockback",    AC_VIOLATION_KNOCKBACK },
     };
 }
 
@@ -435,8 +446,8 @@ bool ChatHandler::HandleAntiCheatGwEventCommand(char* args)
 bool ChatHandler::HandleSpoofCommand(char* args)
 {
     static const char* kinds[] = {
-        "speed", "teleport", "fly", "waterwalk", "hover", "slowfall", "swim",
-        "transport", "vertical", "jump", "desync", "noclip"
+        "speed", "teleport", "fly", "levitate", "waterwalk", "hover", "slowfall", "swim",
+        "transport", "vertical", "jump", "desync", "noclip", "knockback", "reverse"
     };
     const uint32 kindCount = uint32(sizeof(kinds) / sizeof(kinds[0]));
 
@@ -551,6 +562,184 @@ bool ChatHandler::HandleSpoofCommand(char* args)
     std::string status;
     sAntiCheatMgr->BuildStatus(target, status);
     SendSysMessage(status.c_str());
+    return true;
+}
+
+// .anticheat migtest — synthesize an impossible migration arrival against the
+// CALLER and run Player::ValidateMigrationArrival's core, to test the Phase-4 seam
+// check end-to-end (DB read -> distance math -> RecordGatewayViolation -> score)
+// on ONE node without a second node. Temporarily writes a far-away departure
+// snapshot for the caller, sets test-bypass, validates, then restores.
+bool ChatHandler::HandleAntiCheatMigTestCommand(char* /*args*/)
+{
+    Player* target = getSelectedPlayer();
+    if (!target)
+        target = m_session ? m_session->GetPlayer() : NULL;
+    if (!target)
+    {
+        SendSysMessage(".anticheat migtest FAILED: no player. Select/target a player or run in-game.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    // Snapshot the caller's real cluster_character_node row so we can restore it.
+    QueryResult* save = CharacterDatabase.PQuery(
+        "SELECT `node_id` FROM `cluster_character_node` WHERE `guid`=%u", target->GetGUIDLow());
+
+    // Synthetic FAR departure: same map, current position offset by 500yd, departed
+    // "now" (elapsed ~0) so the budget is small and the 500yd jump is impossible.
+    float fx = target->GetPositionX() + 500.0f;
+    CharacterDatabase.PExecute(
+        "REPLACE INTO `cluster_character_node` "
+        "(`guid`,`node_id`,`last_map`,`last_x`,`last_y`,`last_z`,`departed_unixtime`) "
+        "VALUES (%u,%u,%u,%f,%f,%f,UNIX_TIMESTAMP())",
+        target->GetGUIDLow(), sWorld.getConfig(CONFIG_UINT32_CLUSTER_NODE_ID),
+        target->GetMapId(), fx, target->GetPositionY(), target->GetPositionZ());
+
+    // Migration-validate must be ON for the check to run; force it briefly. Test-
+    // bypass also bypasses the GM-exempt gate so the GM caller scores.
+    bool savedValidate = sAntiCheatMgr->MigrationValidateEnabled();
+    if (!savedValidate)
+    {
+        sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_MIGRATION_VALIDATE, true);
+        sAntiCheatMgr->LoadConfig();
+    }
+
+    sAntiCheatMgr->SetTestBypass(true);
+    bool ok = target->ValidateMigrationArrival();
+    sAntiCheatMgr->SetTestBypass(false);
+
+    if (!savedValidate)
+    {
+        sWorld.setConfig(CONFIG_BOOL_ANTICHEAT_MIGRATION_VALIDATE, false);
+        sAntiCheatMgr->LoadConfig();
+    }
+
+    // Restore (or delete) the caller's real row.
+    if (save)
+    {
+        Field* sf = save->Fetch();
+        CharacterDatabase.PExecute(
+            "REPLACE INTO `cluster_character_node` (`guid`,`node_id`) VALUES (%u,%u)",
+            target->GetGUIDLow(), sf[0].GetUInt32());
+        delete save;
+    }
+    else
+    {
+        CharacterDatabase.PExecute("DELETE FROM `cluster_character_node` WHERE `guid`=%u",
+                                   target->GetGUIDLow());
+    }
+
+    PSendSysMessage("AntiCheat migtest on %s: validator returned %s "
+                    "(a flagged teleport => FLAGGED). Note: needs AntiCheat.Enable for scoring.",
+                    target->GetName(), ok ? "OK (no flag)" : "FLAGGED");
+    std::string st;
+    sAntiCheatMgr->BuildStatus(target, st);
+    SendSysMessage(st.c_str());
+    return true;
+}
+
+// Resolve an account id from an already-selected player (may be NULL) or from an
+// account-name arg. Caller passes the selected player so this stays a free helper
+// (getSelectedPlayer is protected on ChatHandler).
+static uint32 AC_ResolveAccountId(Player* selected, char* args, std::string& label)
+{
+    if (selected && selected->GetSession())
+    {
+        label = selected->GetName();
+        return selected->GetSession()->GetAccountId();
+    }
+    char* nameTok = strtok(args, " ");
+    if (nameTok && *nameTok)
+    {
+        std::string acc = nameTok;
+        uint32 id = sAccountMgr.GetId(acc);
+        if (id)
+        {
+            label = acc;
+            return id;
+        }
+    }
+    return 0;
+}
+
+// .anticheat autoban [reset] [<account>] — show (read-through, cluster-wide) the
+// target/account's autoban accumulator, or reset it.
+bool ChatHandler::HandleAntiCheatAutobanCommand(char* args)
+{
+    char* first = strtok(args, " ");
+    bool reset = first && (std::string(first) == "reset");
+    char* rest = reset ? strtok(NULL, " ") : first;
+
+    std::string label;
+    uint32 accountId = AC_ResolveAccountId(getSelectedPlayer(), rest, label);
+    if (!accountId)
+    {
+        SendSysMessage(".anticheat autoban FAILED: select a player or pass an account name. "
+                       "Usage: .anticheat autoban [reset] [<account>].");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    if (reset)
+    {
+        sAntiCheatMgr->ResetAccount(accountId);
+        PSendSysMessage("AntiCheat: reset autoban accumulator for account %u (%s).",
+                        accountId, label.empty() ? "?" : label.c_str());
+        return true;
+    }
+
+    float kickScore = 0.f; uint32 banCount = 0, lastUpdate = 0;
+    sAntiCheatMgr->GetAccountAutobanState(accountId, kickScore, banCount, lastUpdate);
+
+    uint32 threshold = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_THRESHOLD);
+    uint32 decay     = sWorld.getConfig(CONFIG_UINT32_AC_AUTOBAN_DECAY_PER_HOUR);
+    float hoursToZero = (decay > 0) ? (kickScore / float(decay)) : 0.0f;
+    uint32 tier = banCount < 3 ? banCount : 2;
+    static const char* durKey[3] = { "Duration1", "Duration2", "Duration3" };
+    uint32 nextDur = sWorld.getConfig(eConfigUInt32Values(CONFIG_UINT32_AC_AUTOBAN_DUR1 + tier));
+
+    PSendSysMessage("AntiCheat autoban for account %u (%s): kick_score=%.1f / threshold=%u, "
+                    "ban_count=%u, next ban tier=%s (%us), decay-to-zero in ~%.1fh "
+                    "(cluster-wide, read from shared realm DB).",
+                    accountId, label.empty() ? "?" : label.c_str(), kickScore, threshold,
+                    banCount, durKey[tier], nextDur, hoursToZero);
+    return true;
+}
+
+// .anticheat evasion [<account>] — best-effort IP-correlation report (flag-only).
+bool ChatHandler::HandleAntiCheatEvasionCommand(char* args)
+{
+    std::string label;
+    uint32 accountId = AC_ResolveAccountId(getSelectedPlayer(), args, label);
+    if (!accountId)
+    {
+        SendSysMessage(".anticheat evasion FAILED: select a player or pass an account name. "
+                       "Usage: .anticheat evasion [<account>]. Lists non-GM accounts sharing the "
+                       "target's last_ip (flag-only; NEVER auto-bans — shared IPs are common).");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    std::vector<AntiCheatMgr::AntiCheatAlt> alts;
+    sAntiCheatMgr->CorrelateByIp(accountId, alts);
+    if (alts.empty())
+    {
+        PSendSysMessage("AntiCheat evasion: no non-GM accounts share account %u's (%s) last_ip.",
+                        accountId, label.empty() ? "?" : label.c_str());
+        return true;
+    }
+
+    PSendSysMessage("AntiCheat evasion: %u account(s) share account %u's (%s) last_ip "
+                    "(REVIEW ONLY — not banned):", uint32(alts.size()), accountId,
+                    label.empty() ? "?" : label.c_str());
+    for (size_t i = 0; i < alts.size(); ++i)
+    {
+        const AntiCheatMgr::AntiCheatAlt& a = alts[i];
+        PSendSysMessage("  account %u (%s) ip=%s kick_score=%.0f ban_count=%u banned=%s",
+                        a.accountId, a.username.c_str(), a.lastIp.c_str(),
+                        a.kickScore, a.banCount, a.banned ? "YES" : "no");
+    }
     return true;
 }
 
