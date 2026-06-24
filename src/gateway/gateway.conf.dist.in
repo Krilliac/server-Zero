@@ -107,6 +107,19 @@ ConfVersion=@MANGOS_REALM_VER@
 #                                            payload is dropped + reported. The
 #                                            header layer already caps total size
 #                                            at 10240. Default: 8192
+#    Gateway.AntiCheat.Protocol.StrictPreWorld
+#                                            when 1, drop+report any opcode not in
+#                                            the pre-world allowlist sent before a
+#                                            character enters the world. OFF (0) by
+#                                            default: the allowlist is not provably
+#                                            exhaustive vs a real 1.12 client, so a
+#                                            missed char-select opcode would both
+#                                            disconnect the player and feed a false
+#                                            positive into the ban pipeline. The
+#                                            node already enforces per-opcode
+#                                            STATUS_*; enable only after validating
+#                                            your client's char-select traffic.
+#                                            Default: 0
 #
 #    Gateway.AntiCheat.Session.Enable       (default 1)
 #    Gateway.AntiCheat.Session.OnePerAccount
@@ -173,6 +186,7 @@ Gateway.AntiCheat.Rate.GlobalPerSec          = 300
 Gateway.AntiCheat.Rate.FloodDisconnectPerSec = 2000
 Gateway.AntiCheat.Protocol.Enable            = 1
 Gateway.AntiCheat.Protocol.MaxPayloadBytes   = 8192
+Gateway.AntiCheat.Protocol.StrictPreWorld    = 0
 Gateway.AntiCheat.Session.Enable             = 1
 Gateway.AntiCheat.Session.OnePerAccount      = 1
 Gateway.AntiCheat.Session.MaxAccountsPerIp   = 8

@@ -44,30 +44,46 @@ static const uint16 CMSG_MOVE_FORWARD  = 0x00B5;
 
 int main(int /*argc*/, char** /*argv*/)
 {
+    // --- strict pre-world mode ON: the allowlist is enforced ---
     EdgeCheckConfig cfg;
     cfg.maxPayloadBytes = 1024;
+    cfg.protocolStrictPreWorld = true;
     ProtocolValidator v;
     v.Init(cfg);
 
-    // Oversize.
+    // Oversize (independent of strict mode).
     check(v.Check(CMSG_MOVE_FORWARD, 100, true) == ProtocolValidator::OK, "small payload ok");
     check(v.Check(CMSG_MOVE_FORWARD, 2000, true) == ProtocolValidator::OVERSIZE, "oversize flagged");
 
-    // State: a gameplay opcode (movement) before world entry is illegal.
+    // State: a gameplay opcode (movement) before world entry is illegal in strict mode.
     check(v.Check(CMSG_MOVE_FORWARD, 50, false) == ProtocolValidator::ILLEGAL_STATE,
-          "movement before world -> illegal");
+          "strict: movement before world -> illegal");
     check(v.Check(CMSG_MOVE_FORWARD, 50, true) == ProtocolValidator::OK,
-          "movement after world -> ok");
+          "strict: movement after world -> ok");
 
     // A pre-world allowlisted opcode (char enum) is fine before world entry.
     check(v.Check(CMSG_CHAR_ENUM, 0, false) == ProtocolValidator::OK,
-          "char enum pre-world ok");
+          "strict: char enum pre-world ok");
     // CMSG_PLAYER_LOGIN itself is allowed pre-world (it's the transition).
     check(v.Check(CMSG_PLAYER_LOGIN, 8, false) == ProtocolValidator::OK,
-          "player login pre-world ok");
-    // Chat before world entry is gameplay -> illegal.
+          "strict: player login pre-world ok");
+    // Chat before world entry is gameplay -> illegal in strict mode.
     check(v.Check(CMSG_MESSAGECHAT, 20, false) == ProtocolValidator::ILLEGAL_STATE,
-          "chat pre-world -> illegal");
+          "strict: chat pre-world -> illegal");
+
+    // --- default mode (strict OFF): the pre-world state check is inert, so a
+    // non-allowlisted opcode is NOT flagged (the false-positive fix). Oversize
+    // still applies. ---
+    EdgeCheckConfig cfgDefault;          // protocolStrictPreWorld defaults false
+    cfgDefault.maxPayloadBytes = 1024;
+    ProtocolValidator vd;
+    vd.Init(cfgDefault);
+    check(vd.Check(CMSG_MOVE_FORWARD, 50, false) == ProtocolValidator::OK,
+          "default: movement pre-world NOT flagged (no false positive)");
+    check(vd.Check(CMSG_MESSAGECHAT, 20, false) == ProtocolValidator::OK,
+          "default: chat pre-world NOT flagged (no false positive)");
+    check(vd.Check(CMSG_MOVE_FORWARD, 2000, false) == ProtocolValidator::OVERSIZE,
+          "default: oversize still flagged");
 
     if (failures == 0) { printf("ALL TESTS PASSED\n"); return 0; }
     printf("%d TEST(S) FAILED\n", failures);

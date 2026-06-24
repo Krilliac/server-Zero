@@ -55,6 +55,7 @@ struct EdgeCheckConfig
     // --- protocol / opcode validation ---
     bool   protocolEnable;
     uint32 maxPayloadBytes;        ///< per-packet payload cap (header already caps at 10240)
+    bool   protocolStrictPreWorld; ///< drop+report opcodes not in the pre-world allowlist (OFF by default: the allowlist is not provably exhaustive vs a real 1.12 client, so a missed char-select opcode would both disconnect the player and feed a false positive into the ban pipeline; the node already enforces per-opcode STATUS_*). Enable only after validating your client's char-select traffic.
 
     // --- session integrity ---
     bool   sessionEnable;
@@ -76,6 +77,7 @@ struct EdgeCheckConfig
           floodDisconnectPerSec(2000),
           protocolEnable(true),
           maxPayloadBytes(8192),
+          protocolStrictPreWorld(false),
           sessionEnable(true),
           sessionOnePerAccount(true),
           maxAccountsPerIp(8),

@@ -170,12 +170,13 @@ class ProtocolValidator
     public:
         enum Result { OK, OVERSIZE, ILLEGAL_STATE };
 
-        ProtocolValidator() : m_enable(true), m_maxPayload(8192) {}
+        ProtocolValidator() : m_enable(true), m_maxPayload(8192), m_strictPreWorld(false) {}
 
         void Init(const EdgeCheckConfig& cfg)
         {
-            m_enable     = cfg.protocolEnable;
-            m_maxPayload = cfg.maxPayloadBytes;
+            m_enable         = cfg.protocolEnable;
+            m_maxPayload     = cfg.maxPayloadBytes;
+            m_strictPreWorld = cfg.protocolStrictPreWorld;
         }
 
         /// @param worldEntered true once CMSG_PLAYER_LOGIN has been forwarded.
@@ -184,6 +185,7 @@ class ProtocolValidator
     private:
         bool   m_enable;
         uint32 m_maxPayload;
+        bool   m_strictPreWorld;  ///< only enforce the pre-world allowlist when true
 
         /// True if @p opcode is legitimately sent between auth and world entry.
         static bool IsPreWorldAllowed(uint16 opcode);

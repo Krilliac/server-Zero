@@ -84,7 +84,14 @@ ProtocolValidator::Result ProtocolValidator::Check(uint16 opcode, uint32 payload
         return OVERSIZE;
     }
 
-    if (!worldEntered && !IsPreWorldAllowed(opcode))
+    // The pre-world allowlist is only enforced in strict mode. By default it is
+    // OFF: the allowlist cannot be proven exhaustive against a real 1.12 client's
+    // char-select traffic, and a missed opcode would both disconnect the player
+    // and feed a false positive into the node's ban pipeline. The node already
+    // rejects gameplay opcodes before login via its per-opcode STATUS_* gate, so
+    // this edge check is opt-in hardening for operators who have validated their
+    // client traffic.
+    if (m_strictPreWorld && !worldEntered && !IsPreWorldAllowed(opcode))
     {
         return ILLEGAL_STATE;
     }

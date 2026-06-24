@@ -42,6 +42,7 @@ void EdgeCheckConfig::LoadFromConfig()
 
     protocolEnable        = sConfig.GetBoolDefault("Gateway.AntiCheat.Protocol.Enable", true);
     maxPayloadBytes       = (uint32)sConfig.GetIntDefault("Gateway.AntiCheat.Protocol.MaxPayloadBytes", 8192);
+    protocolStrictPreWorld = sConfig.GetBoolDefault("Gateway.AntiCheat.Protocol.StrictPreWorld", false);
 
     sessionEnable         = sConfig.GetBoolDefault("Gateway.AntiCheat.Session.Enable", true);
     sessionOnePerAccount  = sConfig.GetBoolDefault("Gateway.AntiCheat.Session.OnePerAccount", true);
