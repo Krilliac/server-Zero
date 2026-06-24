@@ -55,6 +55,9 @@
 #include "Auth/AuthCrypt.h"
 #include "ByteBuffer.h"
 
+#include "EdgeChecks.h"          // RateLimiter + ProtocolValidator (Phase 2)
+#include "SpeedHackDetector.h"   // SpeedHackDetector (Phase 3)
+
 #include <atomic>
 #include <deque>
 #include <string>
@@ -123,6 +126,13 @@ class ClientSocket : protected ClientHandler
         /// does not include the node's AntiCheatViolationType enum.
         void ReportAcViolation(uint8 type, uint8 severity, const char* detail);
 
+        /// Phase 3: load the Gateway.AntiSpeed.* keys once at boot into the
+        /// process-wide SpeedHackConfig. Called from Main.cpp before the acceptor
+        /// opens. SpeedConfig() returns that config by const ref; every
+        /// ClientSocket's m_speedDetector references it.
+        static void LoadSpeedConfig();
+        static const SpeedHackConfig& SpeedConfig();
+
     protected:
         /// Things called by the ACE framework.
         ClientSocket(void);
@@ -167,6 +177,10 @@ class ClientSocket : protected ClientHandler
         /// owning node and re-home the (player-less) session there if needed.
         /// Does not consume @p recv (the caller forwards the login afterwards).
         void HandlePlayerLogin(const ByteBuffer& recv);
+
+        /// Phase 3: true if @p opcode carries a bare MovementInfo whose offset-4
+        /// uint32 client time the speedhack detector watches.
+        static bool IsWatchedMoveOpcode(uint32 opcode);
 
     private:
         /// Process-wide monotonic source for m_ClientId.
@@ -220,6 +234,28 @@ class ClientSocket : protected ClientHandler
 
         /// Size of m_OutBuffer.
         size_t m_OutBufferSize;
+
+        // --- Phase 2: gateway edge anti-cheat ------------------------------
+        /// Per-connection rate limiter + protocol validator (configured at auth
+        /// from the boot-time EdgeCheckConfig). Touched only on the reactor thread
+        /// servicing this socket, so no extra lock is needed (ACE_TP_Reactor
+        /// dispatches one handler on one thread at a time).
+        RateLimiter        m_RateLimiter;
+        ProtocolValidator  m_Protocol;
+
+        /// Set true once CMSG_PLAYER_LOGIN has been forwarded for this socket.
+        /// Gates the protocol "gameplay opcode before world entry" check.
+        bool m_WorldEntered;
+
+        /// True once this connection has been registered with SessionGuard (so
+        /// handle_close unregisters exactly once). The SessionGuard key is
+        /// m_AccountId + m_Address.
+        bool m_SessionGuarded;
+
+        // --- Phase 3: independent-clock speedhack detector ------------------
+        /// Per-connection windowed speedhack detector. References the process-wide
+        /// SpeedHackConfig loaded at boot. Reactor-thread only, no locks.
+        SpeedHackDetector  m_speedDetector;
 
         // --- Migration orchestration (Phase 3 Task 2) -----------------------
         //

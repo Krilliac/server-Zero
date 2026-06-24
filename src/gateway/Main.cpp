@@ -46,7 +46,10 @@
 #include "Util.h"
 
 #include "ClientSocketMgr.h"
+#include "ClientSocket.h"
 #include "NodeRegistry.h"
+#include "EdgeCheckConfig.h"
+#include "SessionGuard.h"
 
 #include <ace/Get_Opt.h>
 #include <ace/INET_Addr.h>
@@ -66,6 +69,8 @@ uint8 exitCode = 0;                                         ///< Process exit co
 
 DatabaseType LoginDatabase;                                 ///< Accessor to the realm/login database
 DatabaseType CharacterDatabase;                             ///< Accessor to the character database
+
+EdgeCheckConfig g_edgeCfg;                                  ///< Phase 2 edge-check tunables (loaded at boot)
 
 bool StartDB();
 void StopDB();
@@ -181,6 +186,18 @@ extern int main(int argc, char** argv)
 
     ///- Catch termination signals
     HookSignals();
+
+    ///- Load anti-cheat edge-check config once at boot (Phase 2) and configure
+    ///  the cross-connection SessionGuard from it. Load the independent-clock
+    ///  speedhack config (Phase 3) into the process-wide SpeedHackConfig.
+    g_edgeCfg.LoadFromConfig();
+    sSessionGuard().Configure(g_edgeCfg);
+    sLog.outString("gateway: AntiCheat enable=%u rate=%u protocol=%u session=%u (burst=%u global=%u/s flood=%u/s maxPayload=%u accts/ip=%u)",
+        g_edgeCfg.enable ? 1u : 0u, g_edgeCfg.rateEnable ? 1u : 0u,
+        g_edgeCfg.protocolEnable ? 1u : 0u, g_edgeCfg.sessionEnable ? 1u : 0u,
+        g_edgeCfg.rateBurst, g_edgeCfg.globalOpcodesPerSec, g_edgeCfg.floodDisconnectPerSec,
+        g_edgeCfg.maxPayloadBytes, g_edgeCfg.maxAccountsPerIp);
+    ClientSocket::LoadSpeedConfig();
 
     ///- Start accepting inbound game-client connections
     uint16 gatewayPort = sConfig.GetIntDefault("GatewayPort", DEFAULT_WORLDSERVER_PORT);

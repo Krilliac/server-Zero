@@ -80,6 +80,67 @@ ConfVersion=@MANGOS_REALM_VER@
 #        Pure diagnostic; leave OFF in production.
 #        Default: 0
 #
+#    Gateway.AntiCheat.Enable
+#        Master switch for all Phase 2 gateway edge anti-cheat checks
+#        (rate/flood, protocol/opcode, session integrity). Per-check switches
+#        below let you disable parts. All defaults are tolerant of lag + legit
+#        play; detection REPORTS to the owning node (which applies GM-exempt
+#        scoring) and only disconnects on egregious flood / malformed packets.
+#        Default: 1
+#
+#    Gateway.AntiCheat.Rate.Enable          (default 1)
+#    Gateway.AntiCheat.Rate.Burst           per-opcode token-bucket capacity
+#                                            (burst allowance). Default: 40
+#    Gateway.AntiCheat.Rate.RefillPerSec    per-opcode tokens refilled / sec.
+#                                            Default: 20
+#    Gateway.AntiCheat.Rate.GlobalPerSec    total packets/sec/connection above
+#                                            which a rate violation is reported.
+#                                            Default: 300
+#    Gateway.AntiCheat.Rate.FloodDisconnectPerSec
+#                                            total packets/sec/connection above
+#                                            which the connection is dropped at
+#                                            the edge. Default: 2000
+#
+#    Gateway.AntiCheat.Protocol.Enable      (default 1)
+#    Gateway.AntiCheat.Protocol.MaxPayloadBytes
+#                                            per-packet payload cap; a larger
+#                                            payload is dropped + reported. The
+#                                            header layer already caps total size
+#                                            at 10240. Default: 8192
+#
+#    Gateway.AntiCheat.Session.Enable       (default 1)
+#    Gateway.AntiCheat.Session.OnePerAccount
+#                                            report when a second live connection
+#                                            opens for an account. Default: 1
+#    Gateway.AntiCheat.Session.MaxAccountsPerIp
+#                                            accounts-per-source-IP cap; exceeding
+#                                            it is reported (multi-box limit).
+#                                            0 = unlimited. Default: 8
+#    Gateway.AntiCheat.Session.FlagIpChange report a mid-session source-IP change
+#                                            (possible hijack). Default: 1
+#
+#    Gateway.AntiCheat.Severity.Rate / .Protocol / .Session
+#        0..255 hints the node maps to a kick_score weight. Defaults 20/30/25.
+#
+#    Gateway.AntiSpeed.Enable
+#        Phase 3 independent-clock speedhack detector. The gateway timestamps
+#        each movement packet on arrival with a neutral monotonic clock and
+#        compares the client's self-reported MovementInfo.time cadence against
+#        real time over a sliding window. A sustained fast clock = speed/time
+#        hack. It ONLY REPORTS (never disconnects); the node decides escalation.
+#        0 makes it fully inert (no peeking, no per-connection state).
+#        Default: 0
+#    Gateway.AntiSpeed.Window           sliding-window ring size (samples). Default: 20
+#    Gateway.AntiSpeed.MinSamples       min valid pairs before any evaluation. Default: 12
+#    Gateway.AntiSpeed.TolerancePct     tripHigh = 1.0 + this/100; hysteresis
+#                                        clears at half this over 1.0. Default: 30
+#    Gateway.AntiSpeed.SustainWindows   consecutive hot full-window evals required
+#                                        to fire (sustained, not a blip). Default: 3
+#    Gateway.AntiSpeed.MaxGapMs         pair-discard threshold for idle/pause/huge
+#                                        jump filtering. Default: 3000
+#    Gateway.AntiSpeed.CooldownMs       min ms between reports per client after a
+#                                        fire. Default: 10000
+#
 ################################################################################
 LoginDatabaseInfo      = "127.0.0.1;3306;root;mangos;realmd"
 CharacterDatabaseInfo  = "127.0.0.1;3306;root;mangos;character0"
@@ -102,3 +163,29 @@ PidFile                = ""
 LogLevel               = 1
 
 Gateway.SelfTestAcEvent = 0
+
+# --- Phase 2 gateway edge anti-cheat (tolerant defaults) ---
+Gateway.AntiCheat.Enable                     = 1
+Gateway.AntiCheat.Rate.Enable                = 1
+Gateway.AntiCheat.Rate.Burst                 = 40
+Gateway.AntiCheat.Rate.RefillPerSec          = 20
+Gateway.AntiCheat.Rate.GlobalPerSec          = 300
+Gateway.AntiCheat.Rate.FloodDisconnectPerSec = 2000
+Gateway.AntiCheat.Protocol.Enable            = 1
+Gateway.AntiCheat.Protocol.MaxPayloadBytes   = 8192
+Gateway.AntiCheat.Session.Enable             = 1
+Gateway.AntiCheat.Session.OnePerAccount      = 1
+Gateway.AntiCheat.Session.MaxAccountsPerIp   = 8
+Gateway.AntiCheat.Session.FlagIpChange       = 1
+Gateway.AntiCheat.Severity.Rate              = 20
+Gateway.AntiCheat.Severity.Protocol          = 30
+Gateway.AntiCheat.Severity.Session           = 25
+
+# --- Phase 3 independent-clock speedhack detector (OFF by default; report-only) ---
+Gateway.AntiSpeed.Enable                     = 0
+Gateway.AntiSpeed.Window                     = 20
+Gateway.AntiSpeed.MinSamples                 = 12
+Gateway.AntiSpeed.TolerancePct               = 30
+Gateway.AntiSpeed.SustainWindows             = 3
+Gateway.AntiSpeed.MaxGapMs                   = 3000
+Gateway.AntiSpeed.CooldownMs                 = 10000

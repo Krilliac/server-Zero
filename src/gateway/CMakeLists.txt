@@ -111,6 +111,56 @@ target_link_libraries(gateway_aceventtest
         ace
 )
 
+# Standalone self-test for the per-opcode rate limiter (no DB / no socket).
+add_executable(gateway_ratetest
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gateway_rate.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EdgeChecks.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EdgeCheckConfig.cpp
+)
+target_compile_features(gateway_ratetest PUBLIC cxx_std_17)
+set_target_properties(gateway_ratetest PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(gateway_ratetest
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${OPENSSL_INCLUDE_DIR})
+target_link_libraries(gateway_ratetest
+    PUBLIC shared Threads::Threads ${OPENSSL_LIBRARIES} OpenSSL::Crypto ace)
+
+# Standalone self-test for ProtocolValidator (size + opcode-in-state).
+add_executable(gateway_protocoltest
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gateway_protocol.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EdgeChecks.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EdgeCheckConfig.cpp
+)
+target_compile_features(gateway_protocoltest PUBLIC cxx_std_17)
+set_target_properties(gateway_protocoltest PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(gateway_protocoltest
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${OPENSSL_INCLUDE_DIR})
+target_link_libraries(gateway_protocoltest
+    PUBLIC shared Threads::Threads ${OPENSSL_LIBRARIES} OpenSSL::Crypto ace)
+
+# Standalone self-test for SessionGuard (cross-connection account/IP state).
+add_executable(gateway_sessiontest
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gateway_session.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/SessionGuard.cpp
+)
+target_compile_features(gateway_sessiontest PUBLIC cxx_std_17)
+set_target_properties(gateway_sessiontest PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(gateway_sessiontest
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${OPENSSL_INCLUDE_DIR})
+target_link_libraries(gateway_sessiontest
+    PUBLIC shared Threads::Threads ${OPENSSL_LIBRARIES} OpenSSL::Crypto ace)
+
+# Standalone self-test for the independent-clock speedhack detector (Phase 3).
+add_executable(gateway_speedtest
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_gateway_speedhack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/SpeedHackDetector.cpp
+)
+target_compile_features(gateway_speedtest PUBLIC cxx_std_17)
+set_target_properties(gateway_speedtest PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(gateway_speedtest
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${OPENSSL_INCLUDE_DIR})
+target_link_libraries(gateway_speedtest
+    PUBLIC shared Threads::Threads ${OPENSSL_LIBRARIES} OpenSSL::Crypto ace)
+
 if(WIN32 AND MSVC)
     install(
         FILES $<TARGET_PDB_FILE:gateway>

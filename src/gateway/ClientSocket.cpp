@@ -52,8 +52,12 @@
 #include "Common.h"
 #include "Log.h"
 #include "Util.h"
+#include "Timer.h"   // getMSTime (neutral receive clock for the speedhack detector)
 #include "ByteBuffer.h"
 #include "Config/Config.h"
+
+#include "EdgeCheckConfig.h"
+#include "SessionGuard.h"
 
 #include "Database/DatabaseEnv.h"
 #include "Auth/BigNumber.h"
@@ -61,6 +65,10 @@
 
 /// Login database accessor (defined in Main.cpp).
 extern DatabaseType LoginDatabase;
+
+/// Boot-time edge-check config (defined in Main.cpp). Each socket Inits its
+/// per-connection detectors (RateLimiter / ProtocolValidator) from this.
+extern EdgeCheckConfig g_edgeCfg;
 
 /// Opcode constants (mirror Opcodes.h; defined locally so the gateway does
 /// not have to pull in the game's opcode/session headers).
@@ -103,6 +111,72 @@ extern DatabaseType LoginDatabase;
 #ifndef GATEWAY_AC_VIOLATION_RATE
 #define GATEWAY_AC_VIOLATION_RATE 16
 #endif
+/// Additional violation-type numbers (Phase 2/3). Mirror AntiCheatDefines.h's
+/// AntiCheatViolationType on the node; the gateway stays game-independent and
+/// does NOT include that enum. 17 = AC_VIOLATION_PROTOCOL, 18 = AC_VIOLATION_SESSION,
+/// 15 = AC_VIOLATION_GW_SPEED (Phase 1 channel value, already present node-side).
+#ifndef GATEWAY_AC_VIOLATION_PROTOCOL
+#define GATEWAY_AC_VIOLATION_PROTOCOL 17
+#endif
+#ifndef GATEWAY_AC_VIOLATION_SESSION
+#define GATEWAY_AC_VIOLATION_SESSION 18
+#endif
+#ifndef GATEWAY_AC_VIOLATION_GW_SPEED
+#define GATEWAY_AC_VIOLATION_GW_SPEED 15
+#endif
+
+/// Movement opcodes carrying a bare MovementInfo (offset-4 uint32 client time).
+/// Mirror Opcodes.h; see the Phase 3 plan for the watched set. Position /
+/// heartbeat movers only — speed-change / ack / teleport opcodes are excluded
+/// (different payload shape or server-initiated).
+#ifndef GATEWAY_MSG_MOVE_START_FORWARD
+#define GATEWAY_MSG_MOVE_START_FORWARD       0x0B5
+#endif
+#ifndef GATEWAY_MSG_MOVE_START_BACKWARD
+#define GATEWAY_MSG_MOVE_START_BACKWARD      0x0B6
+#endif
+#ifndef GATEWAY_MSG_MOVE_STOP
+#define GATEWAY_MSG_MOVE_STOP                0x0B7
+#endif
+#ifndef GATEWAY_MSG_MOVE_START_STRAFE_LEFT
+#define GATEWAY_MSG_MOVE_START_STRAFE_LEFT   0x0B8
+#endif
+#ifndef GATEWAY_MSG_MOVE_START_STRAFE_RIGHT
+#define GATEWAY_MSG_MOVE_START_STRAFE_RIGHT  0x0B9
+#endif
+#ifndef GATEWAY_MSG_MOVE_STOP_STRAFE
+#define GATEWAY_MSG_MOVE_STOP_STRAFE         0x0BA
+#endif
+#ifndef GATEWAY_MSG_MOVE_JUMP
+#define GATEWAY_MSG_MOVE_JUMP                0x0BB
+#endif
+#ifndef GATEWAY_MSG_MOVE_START_TURN_LEFT
+#define GATEWAY_MSG_MOVE_START_TURN_LEFT     0x0BC
+#endif
+#ifndef GATEWAY_MSG_MOVE_START_TURN_RIGHT
+#define GATEWAY_MSG_MOVE_START_TURN_RIGHT    0x0BD
+#endif
+#ifndef GATEWAY_MSG_MOVE_STOP_TURN
+#define GATEWAY_MSG_MOVE_STOP_TURN           0x0BE
+#endif
+#ifndef GATEWAY_MSG_MOVE_FALL_LAND
+#define GATEWAY_MSG_MOVE_FALL_LAND           0x0C9
+#endif
+#ifndef GATEWAY_MSG_MOVE_START_SWIM
+#define GATEWAY_MSG_MOVE_START_SWIM          0x0CA
+#endif
+#ifndef GATEWAY_MSG_MOVE_STOP_SWIM
+#define GATEWAY_MSG_MOVE_STOP_SWIM           0x0CB
+#endif
+#ifndef GATEWAY_MSG_MOVE_SET_FACING
+#define GATEWAY_MSG_MOVE_SET_FACING          0x0DA
+#endif
+#ifndef GATEWAY_MSG_MOVE_SET_PITCH
+#define GATEWAY_MSG_MOVE_SET_PITCH           0x0DB
+#endif
+#ifndef GATEWAY_MSG_MOVE_HEARTBEAT
+#define GATEWAY_MSG_MOVE_HEARTBEAT           0x0EE
+#endif
 
 #if defined( __GNUC__ )
 #pragma pack(1)
@@ -133,6 +207,64 @@ struct ClientPktHeader
 /// Process-wide source of unique client ids (starts at 1; 0 means "unset").
 std::atomic<uint32> ClientSocket::s_ClientIdCounter(0);
 
+/// Process-wide speedhack config (Phase 3). Function-local static so it is
+/// constructed before the first ClientSocket and lives for the process. Loaded
+/// once from config by LoadSpeedConfig() at boot; referenced by every socket's
+/// m_speedDetector. Default-constructed = inert (enable=false) until loaded.
+const SpeedHackConfig& ClientSocket::SpeedConfig()
+{
+    static SpeedHackConfig g;
+    return g;
+}
+
+void ClientSocket::LoadSpeedConfig()
+{
+    // const_cast: SpeedConfig() hands out a const ref for the hot path, but the
+    // one-time boot load writes the singleton here.
+    SpeedHackConfig& g = const_cast<SpeedHackConfig&>(SpeedConfig());
+
+    g.enable         = sConfig.GetBoolDefault("Gateway.AntiSpeed.Enable", false);
+    g.window         = (uint32)sConfig.GetIntDefault("Gateway.AntiSpeed.Window", 20);
+    g.minSamples     = (uint32)sConfig.GetIntDefault("Gateway.AntiSpeed.MinSamples", 12);
+    g.tolerancePct   = (uint32)sConfig.GetIntDefault("Gateway.AntiSpeed.TolerancePct", 30);
+    g.sustainWindows = (uint32)sConfig.GetIntDefault("Gateway.AntiSpeed.SustainWindows", 3);
+    g.maxGapMs       = (uint32)sConfig.GetIntDefault("Gateway.AntiSpeed.MaxGapMs", 3000);
+    g.cooldownMs     = (uint32)sConfig.GetIntDefault("Gateway.AntiSpeed.CooldownMs", 10000);
+
+    if (g.window == 0) { g.window = 1; } // ring needs at least one slot
+
+    sLog.outString("gateway: AntiSpeed enable=%u window=%u minSamples=%u tol=%u%% sustain=%u maxGap=%ums cooldown=%ums",
+        g.enable ? 1u : 0u, g.window, g.minSamples, g.tolerancePct,
+        g.sustainWindows, g.maxGapMs, g.cooldownMs);
+}
+
+/// Phase 3: opcodes whose payload is a bare MovementInfo (offset-4 client time).
+bool ClientSocket::IsWatchedMoveOpcode(uint32 opcode)
+{
+    switch (opcode)
+    {
+        case GATEWAY_MSG_MOVE_START_FORWARD:
+        case GATEWAY_MSG_MOVE_START_BACKWARD:
+        case GATEWAY_MSG_MOVE_STOP:
+        case GATEWAY_MSG_MOVE_START_STRAFE_LEFT:
+        case GATEWAY_MSG_MOVE_START_STRAFE_RIGHT:
+        case GATEWAY_MSG_MOVE_STOP_STRAFE:
+        case GATEWAY_MSG_MOVE_JUMP:
+        case GATEWAY_MSG_MOVE_START_TURN_LEFT:
+        case GATEWAY_MSG_MOVE_START_TURN_RIGHT:
+        case GATEWAY_MSG_MOVE_STOP_TURN:
+        case GATEWAY_MSG_MOVE_FALL_LAND:
+        case GATEWAY_MSG_MOVE_START_SWIM:
+        case GATEWAY_MSG_MOVE_STOP_SWIM:
+        case GATEWAY_MSG_MOVE_SET_FACING:
+        case GATEWAY_MSG_MOVE_SET_PITCH:
+        case GATEWAY_MSG_MOVE_HEARTBEAT:
+            return true;
+        default:
+            return false;
+    }
+}
+
 ClientSocket::ClientSocket(void)
     : ClientHandler(),
     m_ClientId(++s_ClientIdCounter),
@@ -152,6 +284,11 @@ ClientSocket::ClientSocket(void)
     m_OutBufferLock(),
     m_OutBuffer(0),
     m_OutBufferSize(65536),
+    m_RateLimiter(),
+    m_Protocol(),
+    m_WorldEntered(false),
+    m_SessionGuarded(false),
+    m_speedDetector(ClientSocket::SpeedConfig()),
     m_MigrateState(MIG_NONE),
     m_MigrateDestNode(0),
     m_MigrateOldNode(0),
@@ -367,6 +504,16 @@ int ClientSocket::handle_close(ACE_HANDLE h, ACE_Reactor_Mask)
         sNodeRegistry().UnregisterClient(m_ClientId);
     }
 
+    // Phase 2: release this connection from the cross-connection SessionGuard
+    // (account->socket + ip->count). Guarded by m_SessionGuarded so it runs at
+    // most once; SessionGuard is internally locked, so this is safe even though
+    // handle_close may run on a different reactor thread than auth did.
+    if (m_SessionGuarded)
+    {
+        m_SessionGuarded = false;
+        sSessionGuard().Unregister(m_AccountId, m_Address, this);
+    }
+
     {
         ACE_GUARD_RETURN(LockType, Guard, m_OutBufferLock, -1);
 
@@ -497,6 +644,62 @@ int ClientSocket::handle_input_payload(void)
     }
     else
     {
+        // ---- Phase 2: gateway edge anti-cheat checks ----------------------
+        // Run on the reactor thread that owns this socket. A violation reports
+        // via ReportAcViolation (the node scores it); an egregious flood /
+        // oversize / pre-world gameplay opcode drops the connection here
+        // (return -1 + ECONNRESET, like the malformed-packet path). A sustained-
+        // but-not-egregious rate violation throttles (swallows the packet) and
+        // reports, keeping the connection.
+        if (g_edgeCfg.enable)
+        {
+            const uint32 nowMs = getMSTime();
+
+            // 1) protocol/opcode validation (size + opcode-in-state).
+            if (g_edgeCfg.protocolEnable)
+            {
+                ProtocolValidator::Result pr =
+                    m_Protocol.Check((uint16)opcode, (uint32)payloadLen, m_WorldEntered);
+                if (pr == ProtocolValidator::OVERSIZE)
+                {
+                    sLog.outError("gateway-ac: client %u (acct %u) oversized opcode 0x%04X (%u bytes); closing",
+                        m_ClientId, m_AccountId, opcode, (uint32)payloadLen);
+                    ReportAcViolation(GATEWAY_AC_VIOLATION_PROTOCOL, g_edgeCfg.severityProtocol, "oversize");
+                    errno = ECONNRESET;
+                    return -1; // oversize is egregious: drop it at the edge.
+                }
+                if (pr == ProtocolValidator::ILLEGAL_STATE)
+                {
+                    sLog.outError("gateway-ac: client %u (acct %u) sent gameplay opcode 0x%04X before world entry; closing",
+                        m_ClientId, m_AccountId, opcode);
+                    ReportAcViolation(GATEWAY_AC_VIOLATION_PROTOCOL, g_edgeCfg.severityProtocol, "illegal-state");
+                    errno = ECONNRESET;
+                    return -1; // pre-world gameplay opcode: drop.
+                }
+            }
+
+            // 2) rate / flood.
+            if (g_edgeCfg.rateEnable)
+            {
+                RateLimiter::Result rr = m_RateLimiter.OnOpcode((uint16)opcode, nowMs);
+                if (rr == RateLimiter::FLOOD_DISCONNECT)
+                {
+                    sLog.outError("gateway-ac: client %u (acct %u) flooding (opcode 0x%04X); disconnecting",
+                        m_ClientId, m_AccountId, opcode);
+                    ReportAcViolation(GATEWAY_AC_VIOLATION_RATE, g_edgeCfg.severityRate, "flood");
+                    errno = ECONNRESET;
+                    return -1; // egregious flood: drop at the edge.
+                }
+                if (rr == RateLimiter::RATE_VIOLATION)
+                {
+                    // Throttle = drop THIS packet (don't forward), report, keep
+                    // the connection. Rate-limited but not disconnected.
+                    ReportAcViolation(GATEWAY_AC_VIOLATION_RATE, g_edgeCfg.severityRate, "rate");
+                    return rc; // swallow this packet; do not forward it onward.
+                }
+            }
+        }
+
         // Intercept CMSG_PING: a connection keep-alive (the client sends one every
         // ~30s). In a non-clustered server this is answered at the socket level by
         // WorldSocket::HandlePing; behind the gateway there is no per-node socket,
@@ -525,6 +728,27 @@ int ClientSocket::handle_input_payload(void)
             return rc; // do NOT forward CMSG_PING to the node
         }
 
+        // ---- Phase 3: independent-clock speedhack detection ---------------
+        // Observe-only. Peek the leading uint32 moveFlags + uint32 client time
+        // from the (still-unconsumed) movement payload and feed the neutral
+        // getMSTime() receive clock the client cannot influence. Never consumes
+        // recv and never alters control flow — the packet still forwards below.
+        if (IsWatchedMoveOpcode(opcode) && SpeedConfig().enable && payloadLen >= 8)
+        {
+            const uint8* p = recv.contents();
+            const uint32 clientTime =  (uint32)p[4]        | ((uint32)p[5] << 8)
+                                    | ((uint32)p[6] << 16) | ((uint32)p[7] << 24);
+            SpeedHackDecision d = m_speedDetector.Feed(clientTime, getMSTime());
+            if (d.fire)
+            {
+                char detail[64];
+                snprintf(detail, sizeof(detail), "gw-speed ratio=%.2f", d.ratio);
+                sLog.outString("gateway-ac: client %u (acct %u) speedhack suspect (%s severity %u)",
+                    m_ClientId, m_AccountId, detail, (uint32)d.severity);
+                ReportAcViolation(GATEWAY_AC_VIOLATION_GW_SPEED, d.severity, detail);
+            }
+        }
+
         // Phase 2 / Task 3: intercept CMSG_PLAYER_LOGIN (enter-world). Resolve
         // the character's owning node and, if it differs from the node currently
         // fronting this player-less session, re-home: release on the old node and
@@ -533,6 +757,7 @@ int ClientSocket::handle_input_payload(void)
         if (opcode == GATEWAY_CMSG_PLAYER_LOGIN)
         {
             HandlePlayerLogin(recv);
+            m_WorldEntered = true; // gameplay opcodes are legal from here on
         }
 
         // Post-auth: subsequent packets arrive with their headers decrypted
@@ -675,6 +900,34 @@ int ClientSocket::HandleAuthSession(ByteBuffer& recv)
     m_Locale      = locale;
 
     sLog.outString("gateway: client %s authed (acct %u)", account.c_str(), id);
+
+    // Phase 2: configure this connection's edge detectors from the boot config.
+    m_RateLimiter.Init(g_edgeCfg);
+    m_Protocol.Init(g_edgeCfg);
+
+    // Phase 2: session-integrity registration (one-per-account + per-IP cap).
+    // SessionGuard is internally locked; handle_close unregisters via
+    // m_SessionGuarded. We never force-drop here — the node decides policy.
+    if (g_edgeCfg.enable && g_edgeCfg.sessionEnable)
+    {
+        SessionGuard::AdmitResult sr = sSessionGuard().Register(m_AccountId, m_Address, this);
+        m_SessionGuarded = true;
+
+        if (sr.accountAlreadyLive)
+        {
+            sLog.outString("gateway-ac: account %u opened a second live connection from %s (session violation)",
+                m_AccountId, m_Address.c_str());
+            ReportAcViolation(GATEWAY_AC_VIOLATION_SESSION, g_edgeCfg.severitySession, "multi-session");
+            // Do NOT disconnect here: the node-side policy decides; the latest
+            // connection is recorded as live (mirrors a normal relogin).
+        }
+        if (sr.ipCapExceeded)
+        {
+            sLog.outString("gateway-ac: source IP %s exceeded accounts-per-IP cap (account %u)",
+                m_Address.c_str(), m_AccountId);
+            ReportAcViolation(GATEWAY_AC_VIOLATION_SESSION, g_edgeCfg.severitySession, "ip-account-cap");
+        }
+    }
 
     // Signal success on the wire. m_Crypt is now keyed, so iSendPacket's
     // EncryptSend scrambles this response's 4-byte server header. The body is
