@@ -35,6 +35,7 @@ enum AntiCheatViolationType
     AC_VIOLATION_RATE            = 16,  // packet flood / rate-limit breach (gateway)
     AC_VIOLATION_PROTOCOL        = 17,  // malformed / oversized / illegal-state packet (gateway)
     AC_VIOLATION_SESSION         = 18,  // multi-session / accounts-per-IP / mid-session IP change (gateway)
+    AC_VIOLATION_KNOCKBACK       = 19,  // client ignored a server knockback (anti-knockback hack)
 
     AC_VIOLATION_MAX
 };

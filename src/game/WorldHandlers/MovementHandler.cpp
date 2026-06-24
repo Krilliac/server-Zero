@@ -598,6 +598,12 @@ void WorldSession::HandleMoveKnockBackAck(WorldPacket& recv_data)
 
     HandleMoverRelocation(movementInfo);
 
+    // Anti-cheat (Phase 5): the client acked the knockback (it complied), so clear
+    // the armed anti-knockback window. Also covers the wall-clamp case (a player
+    // knocked into geometry may not displace 3yd but still acks).
+    if (plMover)
+        plMover->GetMovementAnticheat()->ClearKnockBack();
+
     WorldPacket data(MSG_MOVE_KNOCK_BACK, recv_data.size() + 15);
     data << mover->GetObjectGuid();
     data << movementInfo;
@@ -628,6 +634,12 @@ void WorldSession::SendKnockBack(float angle, float horizontalSpeed, float verti
     data << float(horizontalSpeed);                     // Horizontal speed
     data << float(-verticalSpeed);                      // Z Movement speed (vertical)
     SendPacket(&data);
+
+    // Anti-cheat (Phase 5): arm the anti-knockback window. A compliant client
+    // either acks (HandleMoveKnockBackAck -> ClearKnockBack) or displaces away
+    // from the origin within the window; otherwise it swallowed the knockback.
+    if (Player* p = GetPlayer())
+        p->GetMovementAnticheat()->NotifyServerKnockBack(p->GetPositionX(), p->GetPositionY());
 }
 
 /**

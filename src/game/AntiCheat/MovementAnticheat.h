@@ -53,6 +53,13 @@ class MovementAnticheat
         // instead of being scored as an impossible jump.
         void NotifyServerRelocation() { m_trustNext = true; }
 
+        // Anti-knockback (Phase 5): the server sent a knockback; arm a window. A
+        // compliant client either acks (ClearKnockBack) or displaces away from the
+        // origin within the window. If the deadline passes still-armed, the client
+        // swallowed the knockback (anti-knockback hack). Config-gated, GM-exempt.
+        void NotifyServerKnockBack(float originX, float originY);
+        void ClearKnockBack() { m_kbActive = false; }
+
         // Record a server-GRANTED movement capability flag (water-walk, hover,
         // slow-fall, levitate, fly) so the flag-spoof detectors treat the client
         // asserting it as legitimate (aura OR granted), not a spoof. Set by the
@@ -144,6 +151,15 @@ class MovementAnticheat
         // Kinematics (acceleration / velocity-delta gate).
         bool   m_hasKin;
         float  m_lastSpeed;
+        bool   m_hasHeading;
+        float  m_lastHeading;   // last moving-packet heading (atan2(dy,dx)) for the reversal gate
+
+        // Anti-knockback (Phase 5): armed when the server sends a knockback; cleared
+        // by the client's ack or by the player displacing away from the origin. If
+        // the deadline passes still-armed, the client ignored the knockback.
+        bool   m_kbActive;
+        float  m_kbOriginX, m_kbOriginY;
+        uint32 m_kbDeadlineMS;
 
         // Server-granted movement capability flags (water-walk/hover/etc.) — the
         // flag-spoof detectors accept these as legitimate alongside auras.

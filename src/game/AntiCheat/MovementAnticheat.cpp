@@ -67,6 +67,8 @@ MovementAnticheat::MovementAnticheat(Player* owner)
       m_castWinStartMS(0), m_castCount(0),
       m_hasAckTime(false), m_lastAckTime(0),
       m_hasKin(false), m_lastSpeed(0.f),
+      m_hasHeading(false), m_lastHeading(0.f),
+      m_kbActive(false), m_kbOriginX(0.f), m_kbOriginY(0.f), m_kbDeadlineMS(0),
       m_grantedFlags(0),
       m_botWinStartMS(0), m_botSamples(0), m_botCleanCycles(0), m_botRunDist(0.f),
       m_botHasHeading(false), m_botLastHeading(0.f),
@@ -112,6 +114,9 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
         m_hasClientTime = false;
         m_burstWinStartMS = nowMS;
         m_burstCount = 0;
+        // A teleport/load mid-knockback cancels the anti-knockback window so a
+        // legitimate server relocation that coincides can never false-positive.
+        m_kbActive = false;
         return;
     }
 
@@ -191,13 +196,25 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
 
     bool cheapTrip = false;
 
-    // --- Detector: flag contradiction (vanilla players never legitimately fly,
-    // unless the server granted it e.g. via GM tooling). ---
-    if (mi.HasMovementFlag(MovementFlags(MOVEFLAG_FLYING | MOVEFLAG_CAN_FLY)) &&
-        !(m_grantedFlags & (MOVEFLAG_FLYING | MOVEFLAG_CAN_FLY)))
+    // --- Detector: fly / levitate flag contradiction (vanilla players never
+    // legitimately fly, unless the server granted it e.g. via GM tooling).
+    // SetLevitate() is a no-op for players (never grants LEVITATING), so any of
+    // these flags without a server grant is a fly/levitate hack. Grant-whitelisted
+    // only. FLYING|CAN_FLY weight 40; LEVITATING alone weight 30 (slightly lower —
+    // some buggy clients flicker it on water surfaces). else-if so a combined
+    // fly+levitate spoof scores once, at the higher weight. ---
+    const uint32 flyFlags = MOVEFLAG_FLYING | MOVEFLAG_CAN_FLY;
+    if (mi.HasMovementFlag(MovementFlags(flyFlags)) && !(m_grantedFlags & flyFlags))
     {
         ctx.detail = "fly movement flag set";
         sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_FLAG_CONTRADICT, 40.0f, ctx);
+        cheapTrip = true;
+    }
+    else if (mi.HasMovementFlag(MOVEFLAG_LEVITATING) && !(m_grantedFlags & MOVEFLAG_LEVITATING) &&
+             m_player->IsAlive())
+    {
+        ctx.detail = "levitate flag without grant";
+        sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_FLAG_CONTRADICT, 30.0f, ctx);
         cheapTrip = true;
     }
 
@@ -294,6 +311,24 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
                 sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_SPEED, weight, ctx);
             }
         }
+
+        // Instant direction reversal: heading flipped ~180deg between two
+        // consecutive fast packets. Momentum forbids reversing full velocity in one
+        // short tick; bots/teleport-strafe hacks do it. Both speeds must be a big
+        // fraction of allowed so a near-stop turnaround doesn't trip.
+        if (m_hasHeading && horiz > 1.0f && ctx.speed > allowed * 0.7f &&
+            m_lastSpeed > allowed * 0.7f && dtSec < 0.5f && !cheapTrip)
+        {
+            const float PI_F = 3.14159265f;
+            float heading = atan2f(dy, dx);
+            float turn = fabs(heading - m_lastHeading);
+            if (turn > PI_F) turn = 2.0f * PI_F - turn;   // normalise 0..pi
+            if (turn > 2.79f)   // > ~160deg = near-instant about-face
+            {
+                ctx.detail = "instant direction reversal (impossible momentum)";
+                sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 18.0f, ctx);
+            }
+        }
     }
 
     // --- Detector: opcode legality by state — an active locomotion-START command
@@ -385,14 +420,24 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
     // walked through world geometry. VMap query, so gated behind the physics
     // module + a step floor (bounds cost and corner false-positives). Skipped
     // right after a server relocation and when another detector already tripped.
+    // Base: a sizable GROUND step with no LoS between prev and new => walked
+    // through geometry. Strict (config, OFF): also test grounded big-vertical
+    // steps and FALL-state horizontal steps (climbing through a ceiling / clipping
+    // a wall while spoofing fall state). Same VMap LoS call + eye-height offset.
+    bool noclipBase   = (state == AC_MOVE_GROUND && horiz > NOCLIP_MIN_STEP);
+    bool noclipStrict = sWorld.getConfig(CONFIG_BOOL_ANTICHEAT_NOCLIP_STRICT) &&
+                        ((state == AC_MOVE_GROUND && fabs(dz) > 4.0f) ||
+                         (state == AC_MOVE_FALL && horiz > NOCLIP_MIN_STEP));
     if (sAntiCheatMgr->PhysicsEnabled() && m_hasLast && !m_trustNext && !cheapTrip &&
-        state == AC_MOVE_GROUND && horiz > NOCLIP_MIN_STEP)
+        (noclipBase || noclipStrict))
     {
         Map* map = m_player->GetMap();
         if (map && !map->IsInLineOfSight(m_lastX, m_lastY, m_lastZ + 1.5f,
                                          pos->x, pos->y, pos->z + 1.5f))
         {
-            ctx.detail = "moved through geometry (no-clip)";
+            ctx.detail = (noclipStrict && !noclipBase)
+                       ? "moved through geometry (no-clip, vertical/fall)"
+                       : "moved through geometry (no-clip)";
             sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 15.0f, ctx);
             cheapTrip = true;
         }
@@ -504,11 +549,32 @@ void MovementAnticheat::HandlePositionUpdate(uint16 opcode, MovementInfo const& 
         }
     }
 
+    // --- Detector: anti-knockback (client ignored a server knockback) ---
+    // The server armed a window in NotifyServerKnockBack. The client complies by
+    // displacing away from the origin; if the deadline passes while it is still
+    // sitting on the origin, it swallowed the knockback. Config-gated, GM-exempt
+    // (both enforced at arm-time, so reaching here means the window is legitimate).
+    if (m_kbActive)
+    {
+        float kdx = pos->x - m_kbOriginX, kdy = pos->y - m_kbOriginY;
+        if (sqrtf(kdx * kdx + kdy * kdy) > 3.0f)   // moved away => complied
+        {
+            m_kbActive = false;
+        }
+        else if (nowMS >= m_kbDeadlineMS)          // deadline passed, still put
+        {
+            ctx.detail = "ignored server knockback (anti-knockback)";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_KNOCKBACK, 25.0f, ctx);
+            m_kbActive = false;
+        }
+    }
+
     // Update the rolling baseline. Track last clean position for rubberband use
     // in the enforcement slice (a non-teleport, non-impossible packet).
     m_lastX = pos->x; m_lastY = pos->y; m_lastZ = pos->z; m_lastO = pos->o;
     m_lastMS = nowMS; m_lastFlags = mi.GetMovementFlags();
     m_lastSpeed = ctx.speed; m_hasKin = true;   // for the acceleration gate
+    if (horiz > 1.0f) { m_lastHeading = atan2f(dy, dx); m_hasHeading = true; }   // reversal gate
     if (!cheapTrip)
     {
         m_hasValid = true;
@@ -535,6 +601,23 @@ void MovementAnticheat::PeriodicCheck()
         return;
     if (sAntiCheatMgr->IsExempt(m_player))
         return;
+
+    // --- Anti-knockback deadline can expire with no movement packets at all ---
+    if (m_kbActive && getMSTime() >= m_kbDeadlineMS)
+    {
+        float cx = m_player->GetPositionX(), cy = m_player->GetPositionY();
+        float kdx = cx - m_kbOriginX, kdy = cy - m_kbOriginY;
+        if (sqrtf(kdx * kdx + kdy * kdy) <= 3.0f)
+        {
+            AntiCheatContext ctx;
+            ctx.mapId = m_player->GetMapId();
+            ctx.x = cx; ctx.y = cy; ctx.z = m_player->GetPositionZ();
+            ctx.latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
+            ctx.detail = "ignored server knockback (anti-knockback, idle)";
+            sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_KNOCKBACK, 25.0f, ctx);
+        }
+        m_kbActive = false;
+    }
 
     // --- Desync auto-resync (gated, OFF by default) ---
     // When the per-packet desync detector has tripped repeatedly, the client clock
@@ -577,6 +660,20 @@ void MovementAnticheat::PeriodicCheck()
         ctx.detail = reason ? reason : "physics impossible (idle)";
         sAntiCheatMgr->RecordViolation(m_player, AC_VIOLATION_PHYSICS, 20.0f, ctx);
     }
+}
+
+void MovementAnticheat::NotifyServerKnockBack(float originX, float originY)
+{
+    if (!m_player || !sWorld.getConfig(CONFIG_BOOL_ANTICHEAT_KNOCKBACK_CHECK))
+        return;
+    if (sAntiCheatMgr->IsExempt(m_player))
+        return;
+    m_kbActive   = true;
+    m_kbOriginX  = originX;
+    m_kbOriginY  = originY;
+    // grace = a generous fixed budget + latency, so legit lag never trips it.
+    uint32 latency = m_player->GetSession() ? m_player->GetSession()->GetLatencyEWMA() : 0;
+    m_kbDeadlineMS = getMSTime() + 1500 + latency;
 }
 
 void MovementAnticheat::NotifyClientTimeSkip(uint32 skippedMs)
@@ -739,6 +836,7 @@ bool MovementAnticheat::SimulateCheat(const std::string& kind, float mag, std::s
         mi.AddMovementFlag(MovementFlags(MOVEFLAG_FLYING | MOVEFLAG_CAN_FLY));
         outDesc = "fly flag";
     }
+    else if (kind == "levitate") { mi.AddMovementFlag(MOVEFLAG_LEVITATING); outDesc = "levitate flag (no grant)"; }
     else if (kind == "waterwalk") { mi.AddMovementFlag(MOVEFLAG_WATERWALKING); outDesc = "water-walk flag (no aura)"; }
     else if (kind == "hover")     { mi.AddMovementFlag(MOVEFLAG_HOVER);        outDesc = "hover flag (no aura)"; }
     else if (kind == "slowfall")  { mi.AddMovementFlag(MOVEFLAG_SAFE_FALL);    outDesc = "slow-fall flag (no aura)"; }
@@ -762,7 +860,26 @@ bool MovementAnticheat::SimulateCheat(const std::string& kind, float mag, std::s
     {
         float d = mag > 0.f ? mag : 6.0f;
         mi.ChangePosition(cx + cosf(co) * d, cy + sinf(co) * d, cz, co);
-        outDesc = "no-clip (only trips if a wall lies between you and the point)";
+        outDesc = "no-clip (only trips if a wall lies between you and the point; "
+                  "strict mode additionally covers vertical/fall steps)";
+    }
+    else if (kind == "knockback")
+    {
+        // arm a knockback the player ignored: origin = here, deadline already past,
+        // and the crafted packet does NOT move away from the origin.
+        m_kbActive = true; m_kbOriginX = cx; m_kbOriginY = cy;
+        m_kbDeadlineMS = now - 1;          // already expired
+        mi.ChangePosition(cx, cy, cz, co); // did not move away
+        outDesc = "anti-knockback (ignored server knockback)";
+    }
+    else if (kind == "reverse")
+    {
+        // baseline: moving fast +x; crafted packet: moving fast -x, ~no time gap.
+        m_hasKin = true; m_lastSpeed = allowed;
+        m_hasHeading = true; m_lastHeading = 0.0f;       // was heading +x
+        float d = allowed * 0.2f;                        // full-speed step over 0.2s
+        mi.ChangePosition(cx - d, cy, cz, co);           // now heading -x
+        outDesc = "instant direction reversal (physics)";
     }
     else
     {
