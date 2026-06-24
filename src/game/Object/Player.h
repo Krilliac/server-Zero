@@ -2074,6 +2074,16 @@ class Player : public Unit
         bool MigrateToNode(uint32 nodeId);
         static bool ValidateMigrationBlob(ByteBuffer& blob, uint32& guidOut);
 
+        // AC Phase 4: semantically validate a just-arrived migrating player on THIS
+        // (destination) node. The blob/DB load already passed SHA1 integrity; this
+        // proves the values are PHYSICALLY plausible across the migration seam
+        // (position re-anchor / teleport vs node-A last-known + elapsed time, and
+        // coarse stat/inventory bounds). Reuses AC_VIOLATION_TELEPORT/_ITEM +
+        // RecordGatewayViolation/RecordViolation, so config-gating, GM exemption,
+        // scoring and escalation are inherited. Returns false if it flagged. MUST be
+        // called on the world thread after the player is added to the map.
+        bool ValidateMigrationArrival();
+
         // --- Cluster gateway migration (Phase 3): transparent hand-off ---------
         // Single chokepoint for the migration trigger. For a gateway-fronted
         // session it emits GW_MIGRATE_REQUEST to the gateway + SaveToDB + quiesce

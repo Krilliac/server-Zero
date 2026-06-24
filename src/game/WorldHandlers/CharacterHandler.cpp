@@ -50,6 +50,7 @@
 #include "ClusterMgr.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "MovementAnticheat.h"
 #include "CinematicFlyover.h"
 #include "Guild.h"
 #include "GuildMgr.h"
@@ -931,6 +932,19 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
 
     /* Send packets that must be sent only after player is added to the map */
     pCurrChar->SendInitialPacketsAfterAddToMap();
+
+    // AC Phase 4: a migration ARRIVAL re-asserts the authoritative server position.
+    // Validate the arriving state is physically consistent with node A's last-known
+    // position + elapsed time (impossible jump => teleport hack; integrity was
+    // already SHA1-checked, this is the SEMANTIC layer), THEN re-anchor the movement
+    // validator so the FIRST real client packet after the hand-off is trusted (NOT
+    // scored as an impossible jump). The re-anchor is the SAME whitelist every
+    // legitimate server TeleportTo uses. Order matters: validate BEFORE re-anchoring.
+    if (migrationArriving)
+    {
+        pCurrChar->ValidateMigrationArrival();
+        pCurrChar->GetMovementAnticheat()->NotifyServerRelocation();
+    }
 
     /* If it's the player's first login, create cinematic flyover if enabled */
     /* Note: isFirstLogin was captured before mutating getCinematic() (line 807) */

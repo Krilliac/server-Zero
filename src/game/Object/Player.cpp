@@ -31,6 +31,7 @@
 #include "World.h"
 #include "AntiCheatMgr.h"
 #include "MovementAnticheat.h"
+#include "AntiCheatMigration.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "UpdateMask.h"
@@ -5506,6 +5507,12 @@ void Player::SetWaterWalk(bool enable)
  */
 void Player::SetLevitate(bool /*enable*/)
 {
+    // AC Phase 5: this is a no-op stub for players in 1.12 (it never grants
+    // MOVEFLAG_LEVITATING), which is why the movement validator treats a client
+    // asserting LEVITATING without a grant as a levitate hack. If this ever DOES
+    // grant MOVEFLAG_LEVITATING to a player, also call
+    //   GetMovementAnticheat()->SetGrantedFlag(MOVEFLAG_LEVITATING, enable);
+    // so the AC levitate check stays correct (mirrors SetWaterWalk/SetHover/etc.).
     // TODO: check if there is something similar for 2.4.3.
     // WorldPacket data;
     // if (enable)
@@ -21100,9 +21107,16 @@ bool Player::MigrateToNode(uint32 nodeId)
 
     // Record the assignment in a dedicated table (NOT the characters row, which the
     // imminent logout SaveToDB rewrites and would wipe). Authoritative for login
-    // node-affinity routing.
-    CharacterDatabase.PExecute("REPLACE INTO `cluster_character_node` (`guid`,`node_id`) VALUES (%u,%u)",
-                               GetGUIDLow(), nodeId);
+    // node-affinity routing. AC Phase 4: also persist the departure snapshot
+    // (last-known position + wall-clock departure time) so the destination node can
+    // semantically validate the arrival. UNIX_TIMESTAMP() is the shared-DB clock,
+    // neutral to either node's local clock. REPLACE keeps one authoritative row.
+    CharacterDatabase.PExecute(
+        "REPLACE INTO `cluster_character_node` "
+        "(`guid`,`node_id`,`last_map`,`last_x`,`last_y`,`last_z`,`departed_unixtime`) "
+        "VALUES (%u,%u,%u,%f,%f,%f,UNIX_TIMESTAMP())",
+        GetGUIDLow(), nodeId, GetMapId(),
+        GetPositionX(), GetPositionY(), GetPositionZ());
 
     sLog.outString("Cluster: migrating %s (guid %u) to node %u; kicking for reconnect.",
                    GetName(), GetGUIDLow(), nodeId);
@@ -21148,9 +21162,16 @@ bool Player::GatewayMigrateOrKick(uint32 destNode)
 
     // Record the affinity so node B's login routing lands the char on the right
     // node (and a later reconnect would too). Dedicated table — the characters
-    // row is rewritten by SaveToDB, so it must not hold the assignment.
-    CharacterDatabase.PExecute("REPLACE INTO `cluster_character_node` (`guid`,`node_id`) VALUES (%u,%u)",
-                               GetGUIDLow(), destNode);
+    // row is rewritten by SaveToDB, so it must not hold the assignment. AC Phase 4:
+    // also persist the departure snapshot (last-known position + wall-clock
+    // departure time, shared-DB UNIX_TIMESTAMP()) for the destination node's seam
+    // validation. REPLACE keeps one authoritative row.
+    CharacterDatabase.PExecute(
+        "REPLACE INTO `cluster_character_node` "
+        "(`guid`,`node_id`,`last_map`,`last_x`,`last_y`,`last_z`,`departed_unixtime`) "
+        "VALUES (%u,%u,%u,%f,%f,%f,UNIX_TIMESTAMP())",
+        GetGUIDLow(), destNode, GetMapId(),
+        GetPositionX(), GetPositionY(), GetPositionZ());
 
     // Ask the gateway to flip the client's forward-target to node B.
     sGatewayIntake.RequestMigrate(session->GetGatewayClientId(), destNode, GetGUIDLow());
@@ -21169,6 +21190,116 @@ bool Player::GatewayMigrateOrKick(uint32 destNode)
         PlaySpellVisual(sClusterMgr->GetMigrateVisualKit());
 
     return true;
+}
+
+bool Player::ValidateMigrationArrival()
+{
+    // AC Phase 4: semantically validate a just-arrived migrating player on THIS
+    // (destination) node. The blob/DB load already passed integrity (SHA1); this
+    // proves the values are PHYSICALLY plausible across the seam:
+    //   1. Position re-anchor / teleport: distance(arrival, node-A last-known) must
+    //      be achievable in the elapsed wall-clock (shared-DB) time at the player's
+    //      own run-speed * a wide migration tolerance. Same-map only.
+    //   2. Stat/inventory bounds: level/money/health within sane ceilings.
+    // Reuses AC_VIOLATION_TELEPORT/_ITEM + RecordGatewayViolation/RecordViolation so
+    // config-gating, GM exemption, scoring and escalation are inherited. Returns
+    // false if it flagged.
+
+    // Gate 1: feature + framework + exemption. Cheapest checks first.
+    if (!sAntiCheatMgr->IsEnabled() || !sAntiCheatMgr->MigrationValidateEnabled())
+        return true;
+    if (sAntiCheatMgr->IsExempt(this))   // honors AntiCheat.ExemptGMLevel
+        return true;
+
+    // Pull node A's departure snapshot. Absent / NULL ⇒ first migration or a
+    // legacy row: skip cleanly (never flag on missing reference data).
+    QueryResult* res = CharacterDatabase.PQuery(
+        "SELECT `last_map`,`last_x`,`last_y`,`last_z`,"
+        "(UNIX_TIMESTAMP() - `departed_unixtime`) "
+        "FROM `cluster_character_node` "
+        "WHERE `guid`=%u AND `departed_unixtime` IS NOT NULL AND `last_map` IS NOT NULL",
+        GetGUIDLow());
+    if (!res)
+        return true;
+    Field* f = res->Fetch();
+    uint32 lastMap = f[0].GetUInt32();
+    float  lx = f[1].GetFloat();
+    float  ly = f[2].GetFloat();
+    float  lz = f[3].GetFloat();
+    int64  elapsedSec = f[4].GetInt64();   // shared-DB wall clock; node-neutral
+    delete res;
+
+    bool ok = true;
+
+    // --- Check 1: position re-anchor / teleport across the seam ---------------
+    // Only meaningful on the SAME map: a cross-map migration is, by definition, a
+    // legitimate portal/teleport, so distance is not comparable.
+    // A negative or huge elapsed (clock skew / slow hand-off) ⇒ bail, don't flag.
+    if (lastMap == GetMapId() &&
+        elapsedSec >= 0 &&
+        elapsedSec <= int64(sAntiCheatMgr->GetMigrationMaxElapsedSec()))
+    {
+        float dx = GetPositionX() - lx;
+        float dy = GetPositionY() - ly;
+        float dz = GetPositionZ() - lz;
+        float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+
+        float run = GetSpeed(MOVE_RUN);
+        // Wide budget: run-speed * tolerance over the elapsed time, plus the
+        // single-packet teleport slack (covers a legit blink/charge right at the
+        // seam). +1s of elapsed covers hand-off latency the DB clock can't see.
+        float budget = MigrationTravelBudget(run, sAntiCheatMgr->GetMigrationSpeedTolPct(),
+                                             elapsedSec, sAntiCheatMgr->GetTeleportDistance());
+
+        if (dist > budget)
+        {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "migration teleport: moved %.0fyd in %llds (budget %.0fyd)",
+                     dist, (long long)elapsedSec, budget);
+            // Reuse AC_VIOLATION_TELEPORT (=2). Weight scaled by overshoot, clamped.
+            float ratio  = dist / (budget > 1.0f ? budget : 1.0f);
+            float weight = (ratio - 1.0f) * 30.0f;
+            if (weight < 10.0f) weight = 10.0f;
+            if (weight > 40.0f) weight = 40.0f;
+            sAntiCheatMgr->RecordGatewayViolation(this, AC_VIOLATION_TELEPORT, weight, detail);
+            ok = false;
+        }
+    }
+
+    // --- Check 2: stat / inventory sanity bounds ------------------------------
+    // Coarse upper bounds: a coherent-but-tampered blob can carry impossible
+    // values. These are deliberately generous (vanilla 1.12 ceilings).
+    {
+        AntiCheatContext ctx;
+        ctx.mapId = GetMapId();
+        ctx.x = GetPositionX(); ctx.y = GetPositionY(); ctx.z = GetPositionZ();
+        ctx.latency = GetSession() ? GetSession()->GetLatencyEWMA() : 0;
+
+        if (getLevel() > sWorld.getConfig(CONFIG_UINT32_MAX_PLAYER_LEVEL))
+        {
+            ctx.detail = "migration: level over server max";
+            sAntiCheatMgr->RecordViolation(this, AC_VIOLATION_ITEM, 40.0f, ctx);
+            ok = false;
+        }
+        // Vanilla gold cap is 214748 g 36 s 47 c (INT_MAX copper); anything at/over
+        // the uint32 ceiling is a tampered money field.
+        if (GetMoney() >= 0x7FFFFFFFu)
+        {
+            ctx.detail = "migration: money at/over cap (tamper)";
+            sAntiCheatMgr->RecordViolation(this, AC_VIOLATION_ITEM, 40.0f, ctx);
+            ok = false;
+        }
+        // Health/max-health coherence: current health may not exceed max health.
+        if (GetHealth() > GetMaxHealth() && GetMaxHealth() > 0)
+        {
+            ctx.detail = "migration: health exceeds max (tamper)";
+            sAntiCheatMgr->RecordViolation(this, AC_VIOLATION_ITEM, 25.0f, ctx);
+            ok = false;
+        }
+    }
+
+    return ok;
 }
 
 /*********************************************************/
