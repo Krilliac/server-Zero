@@ -36,6 +36,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 /**
@@ -136,6 +137,11 @@ class GdbServer
         // True while inside the stop loop; blocks a breakpoint that fires from
         // a command run during the stop from nesting another stop.
         bool m_inStop = false;
+        // World-thread identity, latched on the first OnWorldUpdate tick so
+        // EnterBreak can reject breakpoints raised from foreign threads. The
+        // id is written once before the latch flag is released.
+        std::atomic<bool> m_worldThreadLatched{false};
+        std::thread::id m_worldThreadId;
         // Set by AttachRsp (network thread); consumed by OnWorldUpdate so all
         // RSP engine state mutation happens on the world thread.
         std::atomic<bool> m_resetPending{false};

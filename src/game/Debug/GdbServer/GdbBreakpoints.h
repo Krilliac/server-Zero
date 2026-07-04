@@ -50,9 +50,10 @@ namespace GdbMon { class MonitorWriter; }
  * inspect game state via the `monitor` surface, then resume.
  *
  * The hot-path guard is a single relaxed atomic load of a per-event bitmask,
- * so call sites cost effectively nothing when their event is not armed. All
- * arming and matching happens on the world thread (monitor dispatch + game
- * code), so the registry needs no locking.
+ * so call sites cost effectively nothing when their event is not armed.
+ * Arming happens on the world thread (monitor dispatch), but matching and
+ * hit-counting can also run from foreign threads (network/DB call sites), so
+ * the registry is serialised with a mutex and the hit counter is atomic.
  */
 namespace GdbBp
 {
