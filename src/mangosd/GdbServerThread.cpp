@@ -277,6 +277,7 @@ class GdbMonSocket : public GdbSocketBase
                     if (i > lineStart)
                     {
                         sGdbServer.SubmitMonitorLine(this, &GdbMonSocket::WriteTextThunk,
+                            &GdbMonSocket::AddRefThunk, &GdbMonSocket::ReleaseThunk,
                             inputBuffer + lineStart);
                     }
                     lineStart = i + 1;
@@ -307,6 +308,19 @@ class GdbMonSocket : public GdbSocketBase
         static void WriteTextThunk(void* ctx, const char* text)
         {
             static_cast<GdbMonSocket*>(ctx)->sendCStr(text);
+        }
+
+        // Pin/unpin this socket's ACE reference count around a queued
+        // monitor request so GdbServer can safely hold ctx across the
+        // network->world thread hop even if the connection closes first.
+        static void AddRefThunk(void* ctx)
+        {
+            static_cast<GdbMonSocket*>(ctx)->add_reference();
+        }
+
+        static void ReleaseThunk(void* ctx)
+        {
+            static_cast<GdbMonSocket*>(ctx)->remove_reference();
         }
 
         char inputBuffer[MON_BUFF_SIZE];

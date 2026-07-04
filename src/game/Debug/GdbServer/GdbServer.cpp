@@ -151,15 +151,22 @@ void GdbServer::FeedRsp(const uint8* data, uint32 len)
     m_inbound.emplace_back(data, data + len);
 }
 
-void GdbServer::SubmitMonitorLine(void* ctx, MonWriter writer, const char* line)
+void GdbServer::SubmitMonitorLine(void* ctx, MonWriter writer, MonRefFn addRef,
+    MonRefFn release, const char* line)
 {
-    if (line == nullptr || writer == nullptr)
+    if (line == nullptr || writer == nullptr || addRef == nullptr ||
+        release == nullptr)
     {
         return;
     }
+    // Pin ctx alive until DrainMonitorRequests (or queue teardown) releases
+    // it — otherwise a socket close racing the world-thread drain would
+    // free ctx while this request still references it.
+    addRef(ctx);
     MonitorReq req;
     req.ctx = ctx;
     req.writer = writer;
+    req.release = release;
     req.line = line;
     std::lock_guard<std::mutex> guard(m_monLock);
     m_monitor.push_back(std::move(req));
@@ -194,6 +201,9 @@ void GdbServer::DrainMonitorRequests()
         {
             req.writer(req.ctx, w.Data());
         }
+        // req's destructor releases the pin taken in SubmitMonitorLine here,
+        // now that the write attempt (safe even if the socket already
+        // started closing) is done.
     }
 }
 
