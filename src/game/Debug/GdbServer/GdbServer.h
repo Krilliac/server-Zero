@@ -63,6 +63,10 @@ class GdbServer
     public:
         typedef void (*RspWriter)(void* ctx, const uint8* data, uint32 len);
         typedef void (*MonWriter)(void* ctx, const char* text);
+        /// Pins/unpins the lifetime of a monitor connection's @p ctx (network
+        /// thread's reference-counted socket) so a queued request can never
+        /// outlive the object it targets; see SubmitMonitorLine.
+        typedef void (*MonRefFn)(void* ctx);
 
         static GdbServer& Instance();
 
@@ -83,8 +87,14 @@ class GdbServer
         void FeedRsp(const uint8* data, uint32 len);
 
         /// Submit one plain-text monitor line ("mangos ...") for execution on
-        /// the world thread; the reply is delivered via @p writer.
-        void SubmitMonitorLine(void* ctx, MonWriter writer, const char* line);
+        /// the world thread; the reply is delivered via @p writer. @p addRef
+        /// is called synchronously (network thread) to pin @p ctx alive for
+        /// as long as the request is queued/in-flight; @p release is called
+        /// exactly once, after the request has been serviced or dropped, to
+        /// undo that pin. This prevents a use-after-free when the socket
+        /// closes before the world thread drains the request.
+        void SubmitMonitorLine(void* ctx, MonWriter writer, MonRefFn addRef,
+            MonRefFn release, const char* line);
 
         // --- world thread side ---------------------------------------------
 
@@ -116,10 +126,62 @@ class GdbServer
         void EnterStop(const char* reason);
         void CaptureContext(GdbRsp::RegSnapshot& out);
 
+        // Move-only: owns one pinning reference (taken by SubmitMonitorLine
+        // via addRef) on ctx and releases it exactly once — on normal
+        // servicing, on drop, or when leftover requests are torn down along
+        // with the queue itself (e.g. at shutdown) — so ctx can never be
+        // freed while a request still points at it.
         struct MonitorReq
         {
+            MonitorReq() = default;
+            MonitorReq(const MonitorReq&) = delete;
+            MonitorReq& operator=(const MonitorReq&) = delete;
+
+            MonitorReq(MonitorReq&& other) noexcept
+                : ctx(other.ctx), writer(other.writer),
+                  release(other.release), line(std::move(other.line))
+            {
+                other.ctx = nullptr;
+                other.writer = nullptr;
+                other.release = nullptr;
+            }
+
+            MonitorReq& operator=(MonitorReq&& other) noexcept
+            {
+                if (this != &other)
+                {
+                    ReleasePin();
+                    ctx = other.ctx;
+                    writer = other.writer;
+                    release = other.release;
+                    line = std::move(other.line);
+                    other.ctx = nullptr;
+                    other.writer = nullptr;
+                    other.release = nullptr;
+                }
+                return *this;
+            }
+
+            ~MonitorReq()
+            {
+                ReleasePin();
+            }
+
+            /// Undo the pinning reference exactly once; safe to call
+            /// unconditionally (no-op after the first call or on a
+            /// moved-from instance).
+            void ReleasePin()
+            {
+                if (release != nullptr)
+                {
+                    release(ctx);
+                    release = nullptr;
+                }
+            }
+
             void* ctx = nullptr;
             MonWriter writer = nullptr;
+            MonRefFn release = nullptr;
             std::string line;
         };
 
