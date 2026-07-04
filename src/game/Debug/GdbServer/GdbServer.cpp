@@ -311,10 +311,24 @@ void GdbServer::EnterStop(const char* reason)
 
 void GdbServer::EnterBreak(const char* reason)
 {
+    if (!m_enabled)
+    {
+        return;
+    }
+    // World-thread-only: EnterStop mutates unguarded RSP state and pauses
+    // the world by blocking this very thread. A breakpoint raised from the
+    // DB worker or an ACE network thread must not enter it; the hit was
+    // already counted by the caller, so just return. The acquire load pairs
+    // with the release store in OnWorldUpdate.
+    if (!m_worldThreadLatched.load(std::memory_order_acquire) ||
+        std::this_thread::get_id() != m_worldThreadId)
+    {
+        return;
+    }
     // Only break when a debugger is attached — otherwise no one could resume
     // the server and the world would hang. Never nest stops (a breakpoint may
     // fire from a command executed while already stopped).
-    if (!m_enabled || m_inStop || !DebuggerAttached())
+    if (m_inStop || !DebuggerAttached())
     {
         return;
     }
@@ -326,6 +340,14 @@ void GdbServer::OnWorldUpdate()
     if (!m_enabled)
     {
         return;
+    }
+
+    // This is the world thread: latch its identity on the first tick so
+    // EnterBreak can reject breakpoints raised from foreign threads.
+    if (!m_worldThreadLatched.load(std::memory_order_acquire))
+    {
+        m_worldThreadId = std::this_thread::get_id();
+        m_worldThreadLatched.store(true, std::memory_order_release);
     }
 
     if (m_resetPending.exchange(false))

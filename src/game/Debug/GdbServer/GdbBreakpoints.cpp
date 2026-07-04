@@ -32,8 +32,10 @@
 #include "GdbMonitor.h"
 #include "GdbServer.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -50,8 +52,12 @@ namespace GdbBp
             uint64 filter;
         };
 
+        // g_entries is mutated on the world thread (monitor commands) but
+        // also iterated by Matches from foreign threads (network/DB call
+        // sites), so every access must hold g_entriesLock.
+        std::mutex g_entriesLock;
         std::vector<Entry> g_entries;
-        uint64 g_hits = 0;
+        std::atomic<uint64> g_hits{0};
 
         // Canonical lower-case name per Event, indexed by enum value. Keep in
         // lockstep with the GdbEvent enum in shared/Debug/GdbEvents.h.
@@ -75,6 +81,7 @@ namespace GdbBp
                           static_cast<size_t>(Event::Count),
                       "kEventNames must match the Event enum");
 
+        // Callers must hold g_entriesLock; do not lock here (self-deadlock).
         void Recount()
         {
             uint64 mask = 0;
@@ -93,6 +100,7 @@ namespace GdbBp
 
     bool Matches(Event e, uint64 detail)
     {
+        std::lock_guard<std::mutex> lock(g_entriesLock);
         for (const Entry& entry : g_entries)
         {
             if (entry.ev == e && (entry.filter == 0 || entry.filter == detail))
@@ -105,6 +113,7 @@ namespace GdbBp
 
     bool Arm(Event e, uint64 filter)
     {
+        std::lock_guard<std::mutex> lock(g_entriesLock);
         for (const Entry& entry : g_entries)
         {
             if (entry.ev == e && entry.filter == filter)
@@ -119,6 +128,7 @@ namespace GdbBp
 
     bool Disarm(Event e, uint64 filter)
     {
+        std::lock_guard<std::mutex> lock(g_entriesLock);
         for (size_t i = 0; i < g_entries.size(); ++i)
         {
             if (g_entries[i].ev == e && g_entries[i].filter == filter)
@@ -133,12 +143,14 @@ namespace GdbBp
 
     void DisarmAll()
     {
+        std::lock_guard<std::mutex> lock(g_entriesLock);
         g_entries.clear();
         Recount();
     }
 
     void List(GdbMon::MonitorWriter& out)
     {
+        std::lock_guard<std::mutex> lock(g_entriesLock);
         if (g_entries.empty())
         {
             out.Str("  (no breakpoints armed)\n");
@@ -159,7 +171,7 @@ namespace GdbBp
             out.Line();
         }
         out.Str("  hits=");
-        out.U64(g_hits);
+        out.U64(g_hits.load());
         out.Line();
     }
 
